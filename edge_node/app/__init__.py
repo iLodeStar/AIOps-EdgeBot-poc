@@ -1,0 +1,1 @@
+"""EdgeBot application package."""

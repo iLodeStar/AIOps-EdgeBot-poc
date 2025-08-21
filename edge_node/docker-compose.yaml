@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  edgebot:
+    build: .
+    container_name: edgebot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # Main server
+      - "8081:8081"   # Health endpoint  
+      - "8082:8082"   # Metrics endpoint
+      - "5514:5514/udp"  # Syslog UDP
+      - "5515:5515"   # Syslog TCP
+    environment:
+      - EDGEBOT_LOG_LEVEL=INFO
+      - EDGEBOT_MOTHERSHIP_URL=https://your-mothership:8443/ingest
+      - EDGEBOT_AUTH_TOKEN=your-token-here
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - edgebot_data:/var/lib/edgebot
+      - edgebot_logs:/var/log/edgebot
+    networks:
+      - edgebot_network
+
+  # Optional: Mock mothership for testing
+  mock-mothership:
+    image: python:3.11-slim
+    command: |
+      bash -c "
+      pip install aiohttp && 
+      python -c '
+      from aiohttp import web, request
+      import json
+      import logging
+      
+      logging.basicConfig(level=logging.INFO)
+      
+      async def ingest(request):
+          data = await request.json()
+          print(f\"Received batch: {len(data.get(\"messages\", []))} messages\")
+          return web.json_response({\"status\": \"accepted\"})
+      
+      app = web.Application()
+      app.router.add_post(\"/ingest\", ingest)
+      web.run_app(app, host=\"0.0.0.0\", port=8443)
+      '
+      "
+    ports:
+      - "8443:8443"
+    networks:
+      - edgebot_network
+
+volumes:
+  edgebot_data:
+  edgebot_logs:
+
+networks:
+  edgebot_network:
+    driver: bridge
