@@ -5,11 +5,12 @@ import json
 import gzip
 import tempfile
 import unittest
+from pathlib import Path
 
-# Add the parent directory to sys.path to import modules
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add the app directory to the path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
 
-from app.output.shipper import build_sanitized_envelope
+from output.shipper import build_sanitized_envelope
 
 
 class TestSanitization(unittest.TestCase):
