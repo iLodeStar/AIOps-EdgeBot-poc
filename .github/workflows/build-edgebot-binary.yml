@@ -1,0 +1,86 @@
+name: Build EdgeBot Binary
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  create:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Build EdgeBot binary
+      run: |
+        chmod +x scripts/build_binary.sh
+        scripts/build_binary.sh
+        
+    - name: Test binary
+      run: |
+        cd edge_node
+        ./dist/edgebot --version
+        ./dist/edgebot --help
+        ./dist/edgebot --dry-run --config config.example.yaml
+        
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: edgebot-binary-${{ github.sha }}
+        path: edge_node/dist/edgebot
+        retention-days: 30
+        
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: edge_node/dist/edgebot
+        name: EdgeBot ${{ github.ref_name }}
+        body: |
+          EdgeBot binary release ${{ github.ref_name }}
+          
+          ## Usage
+          
+          ```bash
+          # Download the binary
+          wget https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/edgebot
+          chmod +x edgebot
+          
+          # Run with example configuration
+          ./edgebot --config config.example.yaml
+          
+          # Run with custom configuration
+          ./edgebot --config /path/to/your/config.yaml
+          ```
+          
+          ## Configuration
+          
+          The binary includes a default configuration with Delhi weather coordinates.
+          You can override settings using environment variables:
+          
+          - `EDGEBOT_WEATHER_LAT`: Weather latitude
+          - `EDGEBOT_WEATHER_LON`: Weather longitude  
+          - `EDGEBOT_WEATHER_CITY`: Weather city name
+          - `EDGEBOT_MOTHERSHIP_URL`: Mothership URL
+          - `EDGEBOT_AUTH_TOKEN`: Authentication token
+          
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
