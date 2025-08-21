@@ -212,6 +212,9 @@ central_platform/data/central.db
 *.db-journal
 *.sqlite-journal
 
+# Test artifacts  
+test_venv/
+
 # Local TLS materials
 scripts/certs/
 *.pem

@@ -1,4 +1,4 @@
-.PHONY: help venv fmt lint test up down logs seed clean
+.PHONY: help venv fmt lint test up down logs seed validate demo clean
 
 # Default target
 help:
@@ -12,6 +12,8 @@ help:
 	@echo "make down      - Stop services"
 	@echo "make logs      - View service logs"
 	@echo "make seed      - Generate seed traffic for testing"
+	@echo "make validate  - Validate POC implementation"
+	@echo "make demo      - Show system overview and sample data"
 	@echo "make clean     - Clean up build artifacts and containers"
 
 venv:
@@ -51,6 +53,14 @@ logs:
 seed:
 	@echo "Generating seed traffic..."
 	python scripts/seed_traffic.py
+
+validate:
+	@echo "Validating EdgeBot POC implementation..."
+	python scripts/validate.py
+
+demo:
+	@echo "Showing EdgeBot POC overview..."
+	python scripts/demo.py
 
 clean:
 	@echo "Cleaning up..."

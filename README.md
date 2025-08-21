@@ -200,6 +200,8 @@ This sends a burst of telemetry data including anomalous values to test the dete
 | `make down` | Stop Docker services |
 | `make logs` | View service logs |
 | `make seed` | Generate test traffic |
+| `make validate` | Validate POC implementation |
+| `make demo` | Show system overview and sample data |
 | `make clean` | Clean build artifacts |
 
 ## File Structure
@@ -252,6 +254,17 @@ docker-compose logs edge
 # Reset database
 rm -f central_platform/data/central.db*
 docker-compose restart central
+```
+
+### Network or SSL Issues
+If you encounter SSL certificate errors during Docker build:
+
+```bash
+# Use alternative installation method
+pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+
+# Or disable SSL verification temporarily (not recommended for production)
+pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r requirements.txt
 ```
 
 ### Connection Issues
