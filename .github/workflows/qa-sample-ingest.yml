@@ -109,6 +109,45 @@ jobs:
           --create-output-dir 2>&1 | tee /tmp/qa-${{ matrix.mode }}-artifacts/qa-logs.txt
         echo "File shipping completed"
         
+    - name: Verify no __spool_id in payloads
+      run: |
+        echo "=== Verify no __spool_id in payloads ==="
+        
+        # Check .json files
+        JSON_MATCHES=$(grep -R "__spool_id" /tmp/qa-${{ matrix.mode }}-payloads/*.json 2>/dev/null || echo "")
+        if [ -z "$JSON_MATCHES" ]; then
+          echo "✓ No spool IDs found in .json files (good!)"
+        else
+          echo "❌ Found spool IDs in .json files:"
+          echo "$JSON_MATCHES"
+        fi
+        
+        # Check .json.gz files
+        GZIP_MATCHES=$(zgrep -a "__spool_id" /tmp/qa-${{ matrix.mode }}-payloads/*.json.gz 2>/dev/null || echo "")
+        if [ -z "$GZIP_MATCHES" ]; then
+          echo "✓ No spool IDs found in .json.gz files (good!)"
+        else
+          echo "❌ Found spool IDs in .json.gz files:"
+          echo "$GZIP_MATCHES"
+        fi
+        
+        # Check for other internal fields
+        OTHER_INTERNAL=$(grep -R -E "(\"status\":|\"attempts\":|\"last_error\":|\"enqueued_at\":|\"__[^\"]*\":)" /tmp/qa-${{ matrix.mode }}-payloads/*.json 2>/dev/null || echo "")
+        if [ -z "$OTHER_INTERNAL" ]; then
+          echo "✓ No other internal fields found in .json files (good!)"
+        else
+          echo "⚠️  Found other internal fields in .json files:"
+          echo "$OTHER_INTERNAL"
+        fi
+        
+        # Fail if any matches found
+        if [ -n "$JSON_MATCHES" ] || [ -n "$GZIP_MATCHES" ]; then
+          echo "ERROR: Found spool IDs in payload files!"
+          exit 1
+        fi
+        
+        echo "All payload verification checks passed!"
+        
     - name: Verify payload files and counts
       run: |
         echo "=== ${{ matrix.mode }} Mode Results ==="

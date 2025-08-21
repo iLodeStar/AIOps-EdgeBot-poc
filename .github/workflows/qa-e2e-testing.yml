@@ -86,9 +86,11 @@ jobs:
         fi
         echo ""
         echo "=== Verify no __spool_id in payloads ==="
-        if grep -r "__spool_id" /tmp/qa-payloads/ || echo "No spool IDs found (good!)"; then
+        if grep -r "__spool_id" /tmp/qa-payloads/; then
           echo "ERROR: Found spool IDs in payload files!"
           exit 1
+        else
+          echo "No spool IDs found (good!)"
         fi
         
     - name: Verify database final state

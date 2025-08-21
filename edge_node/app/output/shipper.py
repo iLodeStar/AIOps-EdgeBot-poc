@@ -16,6 +16,47 @@ from .spool import SQLiteSpool
 logger = structlog.get_logger(__name__)
 
 
+def build_sanitized_envelope(batch_messages: List[Dict[str, Any]], is_retry: bool = False) -> str:
+    """Build sanitized envelope from batch messages, removing all internal fields.
+    
+    This ensures a single source of truth for outbound payloads by:
+    1. Removing any keys starting with "__" (like __spool_id, __spool_timestamp)
+    2. Removing other internal spool metadata: status, attempts, last_error, enqueued_at
+    3. Building a consistent envelope structure
+    
+    Args:
+        batch_messages: List of raw messages from spool
+        is_retry: Whether this is a retry attempt
+        
+    Returns:
+        JSON string ready for output (both .json and .json.gz)
+    """
+    # Internal field keys to remove
+    internal_fields = {'status', 'attempts', 'last_error', 'enqueued_at'}
+    
+    # Sanitize messages by removing internal fields
+    sanitized_messages = []
+    for message in batch_messages:
+        # Remove any keys starting with "__" and specific internal fields
+        clean_message = {
+            k: v for k, v in message.items() 
+            if not k.startswith('__') and k not in internal_fields
+        }
+        sanitized_messages.append(clean_message)
+    
+    # Build consistent envelope structure
+    envelope = {
+        'messages': sanitized_messages,
+        'batch_size': len(sanitized_messages),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'source': 'edgebot',
+        'is_retry': is_retry
+    }
+    
+    # Convert to JSON string (single source of truth)
+    return json.dumps(envelope, separators=(',', ':'))
+
+
 class MessageBuffer:
     """Bounded message buffer with optional disk backing."""
     
@@ -339,24 +380,8 @@ class DataShipper:
                 if wait_time > 0:
                     await asyncio.sleep(wait_time)
             
-            # Sanitize internal fields from messages
-            sanitized_batch = []
-            for message in batch:
-                clean_message = {k: v for k, v in message.items() 
-                               if not k.startswith('__spool')}
-                sanitized_batch.append(clean_message)
-            
-            # Prepare payload
-            payload = {
-                'messages': sanitized_batch,
-                'batch_size': len(sanitized_batch),
-                'timestamp': datetime.now(timezone.utc).isoformat(),
-                'source': 'edgebot',
-                'is_retry': is_retry
-            }
-            
-            # Convert to JSON
-            json_data = json.dumps(payload, separators=(',', ':'))
+            # Build sanitized envelope (single source of truth)
+            json_data = build_sanitized_envelope(batch, is_retry)
             
             # Check if URL is file:// scheme
             url = self.config.get('url', '')

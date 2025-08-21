@@ -117,6 +117,8 @@ def main():
                        help='Maximum buffer size')
     parser.add_argument('--dry-run', action='store_true', 
                        help='Parse CSV but do not insert into buffer')
+    parser.add_argument('--max-lines', type=int, 
+                       help='Maximum number of lines to process')
     parser.add_argument('--tz', help='IANA timezone for naive timestamps (e.g., Asia/Kolkata)')
     
     args = parser.parse_args()
@@ -172,6 +174,11 @@ def main():
         reader = csv.DictReader(input_file, delimiter=delimiter)
         
         for row_num, row in enumerate(reader, 1):
+            # Check max_lines limit
+            if args.max_lines and row_num > args.max_lines:
+                print(f"Stopping after {args.max_lines} lines as requested")
+                break
+                
             try:
                 message = parse_csv_row(row, args.tz)
                 
