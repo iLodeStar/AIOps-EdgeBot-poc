@@ -10,6 +10,9 @@ import structlog
 import click
 import uvloop
 
+# Version information
+__version__ = "1.0.0"
+
 # Add the app directory to the path so we can import our modules
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -399,8 +402,17 @@ class EdgeBotSupervisor:
 @click.option('--config', '-c', default='config.yaml', help='Configuration file path')
 @click.option('--log-level', '-l', default=None, help='Override log level')
 @click.option('--dry-run', is_flag=True, help='Validate configuration and exit')
-def main(config: str, log_level: Optional[str], dry_run: bool):
+@click.option('--version', is_flag=True, help='Show version and exit')
+def main(config: str, log_level: Optional[str], dry_run: bool, version: bool):
     """EdgeBot - Lightweight edge node data collector and shipper."""
+    
+    # Handle version flag
+    if version:
+        print(f"EdgeBot v{__version__}")
+        sys.exit(0)
+    
+    # Log version information
+    print(f"EdgeBot v{__version__} starting...")
     
     # Check if config file exists
     config_path = Path(config)

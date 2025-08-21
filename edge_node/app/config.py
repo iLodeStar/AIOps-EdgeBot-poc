@@ -148,8 +148,8 @@ class ConfigManager:
                 },
                 'weather': {
                     'enabled': False,
-                    'latitude': None,
-                    'longitude': None,
+                    'latitude': 28.6139,
+                    'longitude': 77.2090,
                     'city': None,
                     'interval': 3600,
                     'api_timeout': 30

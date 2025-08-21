@@ -66,6 +66,48 @@ pip install -r requirements.txt
 python -m app.main --config config.yaml
 ```
 
+### Binary Usage
+
+For production deployments, you can use the pre-built EdgeBot binary:
+
+1. **Download the binary:**
+```bash
+# From GitHub Releases
+wget https://github.com/iLodeStar/AIOps-EdgeBot-poc/releases/latest/download/edgebot
+chmod +x edgebot
+```
+
+2. **Run with default configuration:**
+```bash
+# Uses built-in Delhi weather coordinates
+./edgebot --config config.example.yaml
+```
+
+3. **Run with custom configuration:**
+```bash
+./edgebot --config /path/to/your/config.yaml
+```
+
+4. **Override settings with environment variables:**
+```bash
+# Change weather location
+EDGEBOT_WEATHER_CITY="San Francisco" ./edgebot
+
+# Change coordinates directly  
+EDGEBOT_WEATHER_LAT="40.7128" EDGEBOT_WEATHER_LON="-74.0060" ./edgebot
+
+# Custom mothership URL and auth token
+EDGEBOT_MOTHERSHIP_URL="https://your-mothership.com/ingest" \
+EDGEBOT_AUTH_TOKEN="your-token" \
+./edgebot --config config.example.yaml
+```
+
+**Security Note:** The binary runs as non-root by default. For privileged port binding (514/515), use Docker port mapping (host 514->container 5514) or consider `setcap` for the binary (optional):
+```bash
+# Optional: Allow binding to privileged ports without root
+sudo setcap 'cap_net_bind_service=+ep' ./edgebot
+```
+
 ## Configuration
 
 EdgeBot uses a YAML configuration file with environment variable overrides:

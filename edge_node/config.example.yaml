@@ -18,8 +18,8 @@ inputs:
   # Syslog Server Configuration
   syslog:
     enabled: true
-    udp_port: 5514
-    tcp_port: 5515
+    udp_port: 5514  # Non-privileged port (514->5514 for Docker mapping)
+    tcp_port: 5515  # Non-privileged port (515->5515 for Docker mapping)
     bind_address: "0.0.0.0"
     max_message_size: 8192
   
