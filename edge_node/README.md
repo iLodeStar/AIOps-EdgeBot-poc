@@ -8,6 +8,7 @@ A lightweight edge node data collector and shipper designed for Phase 1 AIOps de
 - **Syslog Server**: RFC3164 and RFC5424 compliant syslog listener (UDP port 5514, TCP port 5515)
 - **SNMP Polling**: Async SNMPv2c polling with OID name mapping
 - **Weather Context**: Periodic weather data from Open-Meteo API
+- **File-based Import**: Tools to import CSV weather data and JSONL syslog events
 
 ### Data Shipping
 - **Batched Streaming**: Configurable batch sizes and timeouts
@@ -15,6 +16,12 @@ A lightweight edge node data collector and shipper designed for Phase 1 AIOps de
 - **Authentication**: Bearer token support
 - **Retry Logic**: Exponential backoff with disk buffering
 - **Rate Limiting**: Token bucket rate limiting
+- **File Output**: Support for file:// URLs to write payload files for testing
+
+### Persistence & Buffering
+- **SQLite Spool**: Optional SQLite-backed message buffer for persistence
+- **Commit/ACK Support**: Messages are marked as completed or failed
+- **Buffer Statistics**: Detailed stats on message throughput and status
 
 ### Security & Reliability
 - **TLS Support**: HTTPS with optional mutual TLS
@@ -140,7 +147,20 @@ output:
     auth_token: null  # Set via EDGEBOT_AUTH_TOKEN env var
     batch_size: 100
     batch_timeout: 5.0
+
+# Buffer Configuration
+buffer:
+  max_size: 10000                    # Max messages in memory
+  disk_buffer: false                 # Enable SQLite persistence
+  disk_buffer_path: "/tmp/edgebot_buffer.db"
+  disk_buffer_max_size: "100MB"
 ```
+
+**Buffer Options:**
+- `disk_buffer: true` enables SQLite-backed persistent storage
+- Messages are automatically committed/acked on successful send
+- Failed messages can be retried from persistent storage
+- Use `file://` URLs for testing without external endpoints
 
 ### Environment Variables
 
@@ -193,6 +213,96 @@ inputs:
     enabled: true
     city: "San Francisco"
     interval: 3600
+```
+
+## Data Import and Export Tools
+
+EdgeBot includes command-line tools for importing historical data and exporting payloads for testing.
+
+### Importing Weather CSV Data
+
+Import CSV files containing weather data into the message buffer:
+
+```bash
+# Import CSV with SQLite persistence
+python tools/import_weather_csv.py samples/weather_data.csv
+
+# Import to in-memory buffer
+python tools/import_weather_csv.py --use-memory samples/weather_data.csv
+
+# Dry run to preview import
+python tools/import_weather_csv.py --dry-run samples/weather_data.csv
+```
+
+Expected CSV columns:
+- `timestamp`, `latitude`, `longitude`, `city`
+- `temperature_celsius`, `humidity_percent`, `wind_speed_kmh`
+- `wind_direction_degrees`, `pressure_hpa`, `weather_description`
+
+### Importing JSONL Syslog Events
+
+Import JSONL files containing structured syslog events:
+
+```bash
+# Import all events
+python tools/import_jsonl_events.py samples/syslog_events.jsonl
+
+# Import first 100 events only
+python tools/import_jsonl_events.py --max-lines 100 samples/syslog_events.jsonl
+
+# Preview import format
+python tools/import_jsonl_events.py --dry-run --max-lines 5 samples/syslog_events.jsonl
+```
+
+Expected JSONL fields:
+- `timestamp`, `host`, `message`
+- `facility`, `severity`, `program`, `pid`
+- Additional fields are preserved as `extra_*`
+
+### Database Inspection
+
+Inspect the SQLite message buffer:
+
+```bash
+# Show statistics and sample messages
+python tools/db_dump.py /tmp/edgebot_buffer.db
+
+# Show schema, stats, and 10 messages
+python tools/db_dump.py /tmp/edgebot_buffer.db --all
+
+# Show only pending messages
+python tools/db_dump.py --messages 20 --status pending
+
+# Clean up completed messages older than 1 day
+python tools/db_dump.py --cleanup 86400
+```
+
+### File-based Payload Export
+
+Export message buffer contents to payload files for testing:
+
+```bash
+# Ship to file directory
+python tools/ship_spool_to_file.py \
+  --output-dir /tmp/payloads \
+  --batch-size 50 \
+  --create-output-dir
+
+# Files generated:
+# payload-TIMESTAMP.json.gz  (compressed)
+# payload-TIMESTAMP.json     (readable)
+```
+
+### Configuration for File Output
+
+Configure EdgeBot to write payloads to files instead of HTTP:
+
+```yaml
+output:
+  mothership:
+    url: "file:///tmp/edgebot-output"  # Use file:// URL
+    batch_size: 100
+    compression: true
 ```
 
 ## Monitoring
