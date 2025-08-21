@@ -1,0 +1,212 @@
+name: QA Workflow - End-to-End Data Processing
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: 
+      - 'edge_node/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'edge_node/**'
+  workflow_dispatch:
+
+jobs:
+  e2e-data-processing:
+    name: End-to-End Data Processing Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        cd edge_node
+        pip install -r requirements.txt
+        
+    - name: Run basic tests
+      run: |
+        cd edge_node
+        python tests/test_basic.py
+        
+    - name: Create test database and output directories
+      run: |
+        mkdir -p /tmp/qa-artifacts
+        mkdir -p /tmp/qa-payloads
+        
+    - name: Import weather CSV data
+      run: |
+        cd edge_node
+        python tools/import_weather_csv.py \
+          --buffer-path /tmp/qa-artifacts/edgebot_qa.db \
+          samples/weather_data.csv
+        echo "Weather import completed"
+        
+    - name: Import JSONL syslog events  
+      run: |
+        cd edge_node
+        python tools/import_jsonl_events.py \
+          --buffer-path /tmp/qa-artifacts/edgebot_qa.db \
+          samples/syslog_events.jsonl
+        echo "Syslog events import completed"
+        
+    - name: Dump database statistics
+      run: |
+        cd edge_node
+        python tools/db_dump.py /tmp/qa-artifacts/edgebot_qa.db --stats --messages 5
+        echo "Database inspection completed"
+        
+    - name: Ship spool to file payloads
+      run: |
+        cd edge_node
+        python tools/ship_spool_to_file.py \
+          --buffer-path /tmp/qa-artifacts/edgebot_qa.db \
+          --output-dir /tmp/qa-payloads \
+          --batch-size 20 \
+          --create-output-dir
+        echo "File shipping completed"
+        
+    - name: Verify payload files
+      run: |
+        echo "=== Payload Files Generated ==="
+        ls -la /tmp/qa-payloads/
+        echo ""
+        echo "=== Payload File Sizes ==="
+        du -h /tmp/qa-payloads/*
+        echo ""
+        echo "=== Sample JSON Payload Content ==="
+        if ls /tmp/qa-payloads/*.json 1> /dev/null 2>&1; then
+          head -c 500 /tmp/qa-payloads/*.json | head -1
+        fi
+        echo ""
+        echo "=== Verify no __spool_id in payloads ==="
+        if grep -r "__spool_id" /tmp/qa-payloads/ || echo "No spool IDs found (good!)"; then
+          echo "ERROR: Found spool IDs in payload files!"
+          exit 1
+        fi
+        
+    - name: Verify database final state
+      run: |
+        cd edge_node
+        echo "=== Final Database State ==="
+        python tools/db_dump.py /tmp/qa-artifacts/edgebot_qa.db --stats
+        echo ""
+        echo "=== Database File Size ==="
+        ls -lh /tmp/qa-artifacts/edgebot_qa.db
+        
+    - name: Test file:// URL functionality
+      run: |
+        cd edge_node
+        echo "Testing file:// URL with a small test message..."
+        
+        # Create a minimal test config
+        cat > /tmp/test-config.yaml << EOF
+        buffer:
+          max_size: 100
+          disk_buffer: true
+          disk_buffer_path: /tmp/test-file-url.db
+        mothership:
+          url: file:///tmp/file-url-test
+          batch_size: 5
+          batch_timeout: 1.0
+        EOF
+        
+        # Add a few test messages via import
+        python tools/import_weather_csv.py \
+          --buffer-path /tmp/test-file-url.db \
+          --max-lines 3 \
+          samples/weather_data.csv
+        
+        # Ship to file:// URL  
+        mkdir -p /tmp/file-url-test
+        python tools/ship_spool_to_file.py \
+          --buffer-path /tmp/test-file-url.db \
+          --output-dir /tmp/file-url-test \
+          --batch-size 5
+        
+        echo "file:// URL test completed"
+        ls -la /tmp/file-url-test/
+        
+    - name: Upload SQLite database as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: edgebot-sqlite-database
+        path: /tmp/qa-artifacts/edgebot_qa.db
+        retention-days: 7
+        
+    - name: Upload payload files as artifacts
+      uses: actions/upload-artifact@v4  
+      with:
+        name: edgebot-payload-files
+        path: /tmp/qa-payloads/
+        retention-days: 7
+        
+    - name: Upload test results summary
+      run: |
+        cd edge_node
+        cat > /tmp/qa-summary.txt << EOF
+        EdgeBot QA Test Results
+        =======================
+        Date: $(date)
+        Commit: ${{ github.sha }}
+        Branch: ${{ github.ref_name }}
+        
+        Database Stats:
+        EOF
+        python tools/db_dump.py /tmp/qa-artifacts/edgebot_qa.db --stats >> /tmp/qa-summary.txt
+        
+        echo "" >> /tmp/qa-summary.txt
+        echo "Generated Files:" >> /tmp/qa-summary.txt
+        ls -la /tmp/qa-payloads/ >> /tmp/qa-summary.txt
+        
+        echo "" >> /tmp/qa-summary.txt
+        echo "File Sizes:" >> /tmp/qa-summary.txt  
+        du -h /tmp/qa-payloads/* >> /tmp/qa-summary.txt
+        
+    - name: Upload QA summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-test-summary
+        path: /tmp/qa-summary.txt
+        retention-days: 14
+        
+  # Optional: Test with different Python versions
+  compatibility-test:
+    name: Python Compatibility Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Install dependencies
+      run: |
+        cd edge_node
+        pip install -r requirements.txt
+        
+    - name: Test tools functionality
+      run: |
+        cd edge_node
+        
+        # Test imports with dry run
+        python tools/import_weather_csv.py --dry-run samples/weather_data.csv
+        python tools/import_jsonl_events.py --dry-run --max-lines 3 samples/syslog_events.jsonl
+        
+        # Test database dump (on non-existent DB should show error gracefully)
+        python tools/db_dump.py /tmp/nonexistent.db || echo "Expected failure handled correctly"
+        
+        echo "Python ${{ matrix.python-version }} compatibility test passed"

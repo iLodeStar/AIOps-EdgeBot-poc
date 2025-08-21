@@ -3,11 +3,15 @@ import asyncio
 import json
 import gzip
 import time
+import os
+import aiofiles
 from collections import deque
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Callable
+from urllib.parse import urlparse
 import httpx
 import structlog
+from .spool import SQLiteSpool
 
 logger = structlog.get_logger(__name__)
 
@@ -20,52 +24,98 @@ class MessageBuffer:
         self.max_size = max_size
         self.disk_buffer = disk_buffer
         self.disk_path = disk_path
-        self._queue = deque(maxlen=max_size)
         self._dropped_messages = 0
         self._total_messages = 0
+        
+        if disk_buffer and disk_path:
+            # Use SQLite spool for persistent storage
+            self._spool = SQLiteSpool(disk_path)
+            self._queue = None
+            logger.info("MessageBuffer using SQLite spool", path=disk_path)
+        else:
+            # Use in-memory deque
+            self._spool = None
+            self._queue = deque(maxlen=max_size)
+            logger.info("MessageBuffer using in-memory queue", max_size=max_size)
     
-    def put(self, message: Dict[str, Any]):
+    def put(self, message: Dict[str, Any]) -> bool:
         """Add a message to the buffer."""
         self._total_messages += 1
-        
-        if len(self._queue) >= self.max_size:
-            self._dropped_messages += 1
-            logger.warning("Message buffer full, dropping message",
-                          buffer_size=len(self._queue), dropped=self._dropped_messages)
-            return False
         
         # Add timestamp if not present
         if 'timestamp' not in message:
             message['timestamp'] = datetime.now(timezone.utc).isoformat()
         
-        self._queue.append(message)
-        return True
+        if self._spool:
+            # SQLite spool handles persistence
+            try:
+                self._spool.put(message)
+                return True
+            except Exception as e:
+                logger.error("Failed to add message to spool", error=str(e))
+                self._dropped_messages += 1
+                return False
+        else:
+            # In-memory queue with size limit
+            if len(self._queue) >= self.max_size:
+                self._dropped_messages += 1
+                logger.warning("Message buffer full, dropping message",
+                              buffer_size=len(self._queue), dropped=self._dropped_messages)
+                return False
+            
+            self._queue.append(message)
+            return True
     
     def get_batch(self, batch_size: int) -> List[Dict[str, Any]]:
         """Get a batch of messages."""
-        batch = []
-        for _ in range(min(batch_size, len(self._queue))):
-            if self._queue:
-                batch.append(self._queue.popleft())
-        return batch
+        if self._spool:
+            return self._spool.get_batch(batch_size)
+        else:
+            batch = []
+            for _ in range(min(batch_size, len(self._queue))):
+                if self._queue:
+                    batch.append(self._queue.popleft())
+            return batch
+    
+    def commit_batch(self, messages: List[Dict[str, Any]], success: bool):
+        """Commit or rollback a batch of messages (only for SQLite spool)."""
+        if self._spool:
+            self._spool.commit_batch(messages, success)
     
     def size(self) -> int:
         """Get current buffer size."""
-        return len(self._queue)
+        if self._spool:
+            return self._spool.size()
+        else:
+            return len(self._queue)
     
     def is_empty(self) -> bool:
         """Check if buffer is empty."""
-        return len(self._queue) == 0
+        return self.size() == 0
     
     def get_stats(self) -> Dict[str, Any]:
         """Get buffer statistics."""
-        return {
-            'current_size': len(self._queue),
-            'max_size': self.max_size,
-            'total_messages': self._total_messages,
-            'dropped_messages': self._dropped_messages,
-            'utilization': len(self._queue) / self.max_size if self.max_size > 0 else 0
-        }
+        if self._spool:
+            spool_stats = self._spool.get_stats()
+            return {
+                'current_size': spool_stats['pending'],
+                'max_size': self.max_size,  # Not applicable for SQLite but keep for compatibility
+                'total_messages': spool_stats['total_messages'],
+                'completed_messages': spool_stats['completed'],
+                'failed_messages': spool_stats['failed'],
+                'dropped_messages': self._dropped_messages,
+                'disk_buffer': True,
+                'db_path': spool_stats['db_path']
+            }
+        else:
+            return {
+                'current_size': len(self._queue),
+                'max_size': self.max_size,
+                'total_messages': self._total_messages,
+                'dropped_messages': self._dropped_messages,
+                'utilization': len(self._queue) / self.max_size if self.max_size > 0 else 0,
+                'disk_buffer': False
+            }
 
 
 class RetryManager:
@@ -180,34 +230,43 @@ class DataShipper:
     
     async def start(self):
         """Start the data shipper."""
-        # Create HTTP client
-        timeout = httpx.Timeout(
-            connect=self.config.get('connect_timeout', 10),
-            read=self.config.get('read_timeout', 30),
-            write=self.config.get('write_timeout', 10),
-            pool=self.config.get('pool_timeout', 10)
-        )
+        # Check if we need HTTP client (not file:// URL)
+        url = self.config.get('url', '')
+        parsed_url = urlparse(url)
         
-        # TLS configuration
-        verify = self.config.get('tls_verify', True)
-        cert = None
-        if self.config.get('tls_client_cert') and self.config.get('tls_client_key'):
-            cert = (self.config['tls_client_cert'], self.config['tls_client_key'])
-        
-        self.client = httpx.AsyncClient(
-            timeout=timeout,
-            verify=verify,
-            cert=cert,
-            follow_redirects=True,
-            headers={'User-Agent': 'EdgeBot-Shipper/1.0'}
-        )
+        if parsed_url.scheme not in ('file', ''):
+            # Create HTTP client for HTTP/HTTPS
+            timeout = httpx.Timeout(
+                connect=self.config.get('connect_timeout', 10),
+                read=self.config.get('read_timeout', 30),
+                write=self.config.get('write_timeout', 10),
+                pool=self.config.get('pool_timeout', 10)
+            )
+            
+            # TLS configuration
+            verify = self.config.get('tls_verify', True)
+            cert = None
+            if self.config.get('tls_client_cert') and self.config.get('tls_client_key'):
+                cert = (self.config['tls_client_cert'], self.config['tls_client_key'])
+            
+            self.client = httpx.AsyncClient(
+                timeout=timeout,
+                verify=verify,
+                cert=cert,
+                follow_redirects=True,
+                headers={'User-Agent': 'EdgeBot-Shipper/1.0'}
+            )
+        else:
+            # No HTTP client needed for file:// URLs
+            self.client = None
         
         self.running = True
         self.ship_task = asyncio.create_task(self._ship_loop())
         
         logger.info("Data shipper started", 
                    url=self.config.get('url'),
-                   batch_size=self.config.get('batch_size', 100))
+                   batch_size=self.config.get('batch_size', 100),
+                   scheme=parsed_url.scheme or 'http')
     
     async def stop(self):
         """Stop the data shipper."""
@@ -271,6 +330,8 @@ class DataShipper:
         if not batch:
             return
         
+        success = False
+        
         try:
             # Rate limiting
             if self.rate_limiter:
@@ -278,10 +339,17 @@ class DataShipper:
                 if wait_time > 0:
                     await asyncio.sleep(wait_time)
             
+            # Sanitize internal fields from messages
+            sanitized_batch = []
+            for message in batch:
+                clean_message = {k: v for k, v in message.items() 
+                               if not k.startswith('__spool')}
+                sanitized_batch.append(clean_message)
+            
             # Prepare payload
             payload = {
-                'messages': batch,
-                'batch_size': len(batch),
+                'messages': sanitized_batch,
+                'batch_size': len(sanitized_batch),
                 'timestamp': datetime.now(timezone.utc).isoformat(),
                 'source': 'edgebot',
                 'is_retry': is_retry
@@ -290,6 +358,72 @@ class DataShipper:
             # Convert to JSON
             json_data = json.dumps(payload, separators=(',', ':'))
             
+            # Check if URL is file:// scheme
+            url = self.config.get('url', '')
+            parsed_url = urlparse(url)
+            
+            if parsed_url.scheme == 'file':
+                # File-based output
+                await self._write_to_file(json_data, parsed_url.path)
+                success = True
+            else:
+                # HTTP-based output
+                success = await self._send_http_batch(json_data, batch)
+            
+            if success:
+                # Update statistics
+                self.stats['total_batches_sent'] += 1
+                self.stats['total_messages_sent'] += len(batch)
+                self.stats['total_bytes_sent'] += len(json_data.encode('utf-8'))
+                self.stats['last_successful_send'] = time.time()
+                
+                logger.debug("Batch sent successfully",
+                           messages=len(batch), success=success)
+        
+        except Exception as e:
+            self.stats['total_failures'] += 1
+            self.stats['last_failure'] = time.time()
+            
+            logger.error("Error sending batch",
+                        error=str(e), messages=len(batch))
+            if not is_retry:
+                self.retry_manager.add_failed_batch(batch)
+        
+        finally:
+            # Commit or rollback the batch in the buffer
+            self.buffer.commit_batch(batch, success)
+    
+    async def _write_to_file(self, json_data: str, base_path: str):
+        """Write payload to file with gzip compression and plain JSON copy."""
+        # Create output directory
+        os.makedirs(base_path, exist_ok=True)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # milliseconds
+        
+        # Write gzipped payload
+        gzip_filename = f"payload-{timestamp}.json.gz"
+        gzip_path = os.path.join(base_path, gzip_filename)
+        
+        compressed_data = gzip.compress(json_data.encode('utf-8'))
+        async with aiofiles.open(gzip_path, 'wb') as f:
+            await f.write(compressed_data)
+        
+        # Write plain JSON for readability
+        json_filename = f"payload-{timestamp}.json"
+        json_path = os.path.join(base_path, json_filename)
+        
+        async with aiofiles.open(json_path, 'w') as f:
+            await f.write(json_data)
+        
+        logger.info("Payload written to files", 
+                   gzip_file=gzip_path, 
+                   json_file=json_path,
+                   size_bytes=len(json_data))
+    
+    async def _send_http_batch(self, json_data: str, batch: List[Dict[str, Any]]) -> bool:
+        """Send batch via HTTP/HTTPS."""
+        try:
             # Compression
             if self.config.get('compression', True):
                 data = gzip.compress(json_data.encode('utf-8'))
@@ -307,7 +441,7 @@ class DataShipper:
             
             # Send request
             logger.debug("Sending batch to mothership", 
-                        messages=len(batch), bytes=len(data), retry=is_retry)
+                        messages=len(batch), bytes=len(data))
             
             response = await self.client.post(
                 self.config['url'],
@@ -317,19 +451,11 @@ class DataShipper:
             
             response.raise_for_status()
             
-            # Update statistics
-            self.stats['total_batches_sent'] += 1
-            self.stats['total_messages_sent'] += len(batch)
-            self.stats['total_bytes_sent'] += len(data)
-            self.stats['last_successful_send'] = time.time()
-            
-            logger.debug("Batch sent successfully",
+            logger.debug("HTTP batch sent successfully",
                         messages=len(batch), status=response.status_code)
+            return True
             
         except httpx.HTTPStatusError as e:
-            self.stats['total_failures'] += 1
-            self.stats['last_failure'] = time.time()
-            
             # Don't retry client errors (4xx)
             if 400 <= e.response.status_code < 500:
                 logger.error("Client error sending batch, not retrying",
@@ -337,26 +463,13 @@ class DataShipper:
             else:
                 logger.warning("Server error sending batch, will retry",
                              status=e.response.status_code, messages=len(batch))
-                if not is_retry:  # Avoid infinite retry loops
-                    self.retry_manager.add_failed_batch(batch)
+                raise  # Re-raise to trigger retry
+            return False
             
         except (httpx.RequestError, asyncio.TimeoutError) as e:
-            self.stats['total_failures'] += 1
-            self.stats['last_failure'] = time.time()
-            
             logger.warning("Network error sending batch, will retry",
                           error=str(e), messages=len(batch))
-            if not is_retry:
-                self.retry_manager.add_failed_batch(batch)
-            
-        except Exception as e:
-            self.stats['total_failures'] += 1
-            self.stats['last_failure'] = time.time()
-            
-            logger.error("Unexpected error sending batch",
-                        error=str(e), messages=len(batch))
-            if not is_retry:
-                self.retry_manager.add_failed_batch(batch)
+            raise  # Re-raise to trigger retry
     
     def get_stats(self) -> Dict[str, Any]:
         """Get shipping statistics."""
