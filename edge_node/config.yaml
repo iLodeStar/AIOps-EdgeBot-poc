@@ -1,0 +1,74 @@
+# EdgeBot Configuration
+# This file contains configuration for the Edge Node Bot
+
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 1
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "json"
+  file: null  # Log to stdout if null
+
+# Input Sources
+inputs:
+  # Syslog Server Configuration
+  syslog:
+    enabled: true
+    udp_port: 5514
+    tcp_port: 5515
+    bind_address: "0.0.0.0"
+    max_message_size: 8192
+  
+  # SNMP Polling Configuration  
+  snmp:
+    enabled: false
+    targets: []
+    # Example target configuration:
+    # - host: "192.168.1.1"
+    #   community: "public"
+    #   port: 161
+    #   interval: 60
+    #   oids:
+    #     - "1.3.6.1.2.1.1.3.0"  # sysUpTime
+    #     - "1.3.6.1.2.1.1.5.0"  # sysName
+  
+  # Weather Context Configuration
+  weather:
+    enabled: false
+    latitude: null
+    longitude: null
+    city: null  # Alternative to lat/lon
+    interval: 3600  # 1 hour in seconds
+    api_timeout: 30
+
+# Output Configuration  
+output:
+  mothership:
+    url: "https://localhost:8443/ingest"
+    auth_token: null  # Set via EDGEBOT_AUTH_TOKEN env var
+    batch_size: 100
+    batch_timeout: 5.0  # seconds
+    max_retries: 3
+    retry_backoff: 1.0  # seconds
+    compression: true
+    tls_verify: true
+    tls_client_cert: null
+    tls_client_key: null
+
+# Health and Metrics
+observability:
+  health_port: 8081
+  metrics_port: 8082
+  metrics_path: "/metrics"
+  health_path: "/healthz"
+
+# Buffer Configuration
+buffer:
+  max_size: 10000  # Maximum number of messages in memory
+  disk_buffer: false
+  disk_buffer_path: "/tmp/edgebot_buffer.db"
+  disk_buffer_max_size: "100MB"
