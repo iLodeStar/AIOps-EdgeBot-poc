@@ -395,8 +395,13 @@ class DataShipper:
     
     async def _write_to_file(self, json_data: str, base_path: str):
         """Write payload to file with gzip compression and plain JSON copy."""
-        # Create output directory
-        os.makedirs(base_path, exist_ok=True)
+        try:
+            # Create output directory with better error handling
+            os.makedirs(base_path, exist_ok=True)
+        except OSError as e:
+            error_msg = f"Failed to create output directory '{base_path}': {e}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
         
         # Generate filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]  # milliseconds

@@ -1,0 +1,177 @@
+name: QA Sample Ingest - File vs Stdin Modes
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: 
+      - 'edge_node/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'edge_node/**'
+  workflow_dispatch:
+
+jobs:
+  qa-ingest:
+    name: QA Sample Ingest - ${{ matrix.mode }} Mode
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        mode: [file, stdin]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        cd edge_node
+        pip install -r requirements.txt
+        
+    - name: Run basic tests
+      run: |
+        cd edge_node
+        python tests/test_basic.py
+        
+    - name: Create test directories
+      run: |
+        mkdir -p /tmp/qa-${{ matrix.mode }}-artifacts
+        mkdir -p /tmp/qa-${{ matrix.mode }}-payloads
+        
+    - name: Import weather CSV data - ${{ matrix.mode }} mode
+      run: |
+        cd edge_node
+        if [ "${{ matrix.mode }}" = "file" ]; then
+          python tools/import_weather_csv.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            samples/weather_data.csv
+        else
+          cat samples/weather_data.csv | python tools/import_weather_csv.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            --stdin
+        fi
+        echo "Weather import completed"
+        
+    - name: Import JSONL syslog events - ${{ matrix.mode }} mode
+      run: |
+        cd edge_node
+        if [ "${{ matrix.mode }}" = "file" ]; then
+          python tools/import_jsonl_events.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            --record-type syslog_event \
+            --map-severity \
+            samples/syslog_events.jsonl
+        else
+          cat samples/syslog_events.jsonl | python tools/import_jsonl_events.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            --record-type syslog_event \
+            --map-severity \
+            --stdin
+        fi
+        echo "Syslog events import completed"
+        
+    - name: Import SNMP metrics - ${{ matrix.mode }} mode  
+      run: |
+        cd edge_node
+        if [ "${{ matrix.mode }}" = "file" ]; then
+          python tools/import_jsonl_events.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            --record-type snmp_metric \
+            --percent-as-ratio \
+            samples/snmp_metrics.jsonl
+        else
+          cat samples/snmp_metrics.jsonl | python tools/import_jsonl_events.py \
+            --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+            --record-type snmp_metric \
+            --percent-as-ratio \
+            --stdin
+        fi
+        echo "SNMP metrics import completed"
+        
+    - name: Generate database dump
+      run: |
+        cd edge_node
+        python tools/db_dump.py /tmp/qa-${{ matrix.mode }}-artifacts/spool.db --stats --messages 10 > /tmp/qa-${{ matrix.mode }}-artifacts/db_dump.txt
+        echo "Database dump completed"
+        
+    - name: Ship spool to file payloads
+      run: |
+        cd edge_node
+        python tools/ship_spool_to_file.py \
+          --buffer-path /tmp/qa-${{ matrix.mode }}-artifacts/spool.db \
+          --output-dir /tmp/qa-${{ matrix.mode }}-payloads \
+          --batch-size 100 \
+          --create-output-dir 2>&1 | tee /tmp/qa-${{ matrix.mode }}-artifacts/qa-logs.txt
+        echo "File shipping completed"
+        
+    - name: Verify payload files and counts
+      run: |
+        echo "=== ${{ matrix.mode }} Mode Results ==="
+        echo "Database file:"
+        ls -lh /tmp/qa-${{ matrix.mode }}-artifacts/spool.db
+        echo ""
+        echo "Generated payload files:"
+        ls -la /tmp/qa-${{ matrix.mode }}-payloads/
+        echo ""
+        echo "File sizes:"
+        du -h /tmp/qa-${{ matrix.mode }}-payloads/*
+        echo ""
+        echo "Expected: 1736 messages, 18 batches"
+        echo "Payload count: $(ls /tmp/qa-${{ matrix.mode }}-payloads/*.json | wc -l)"
+        echo ""
+        echo "Sample JSON payload content (first 200 chars):"
+        if ls /tmp/qa-${{ matrix.mode }}-payloads/*.json 1> /dev/null 2>&1; then
+          head -c 200 /tmp/qa-${{ matrix.mode }}-payloads/*.json | head -1
+        fi
+        
+    - name: Verify database final state
+      run: |
+        cd edge_node
+        echo "=== Final Database State - ${{ matrix.mode }} Mode ==="
+        python tools/db_dump.py /tmp/qa-${{ matrix.mode }}-artifacts/spool.db --stats
+        
+    - name: Upload SQLite database artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-${{ matrix.mode }}-artifacts
+        path: |
+          /tmp/qa-${{ matrix.mode }}-artifacts/spool.db
+          /tmp/qa-${{ matrix.mode }}-artifacts/db_dump.txt
+          /tmp/qa-${{ matrix.mode }}-artifacts/qa-logs.txt
+          /tmp/qa-${{ matrix.mode }}-payloads/
+        retention-days: 7
+        
+    - name: Generate test summary
+      run: |
+        cd edge_node
+        cat > /tmp/qa-${{ matrix.mode }}-summary.txt << EOF
+        EdgeBot QA Test Results - ${{ matrix.mode }} Mode
+        ====================================================
+        Date: $(date)
+        Commit: ${{ github.sha }}
+        Branch: ${{ github.ref_name }}
+        Mode: ${{ matrix.mode }}
+        
+        Database Stats:
+        EOF
+        python tools/db_dump.py /tmp/qa-${{ matrix.mode }}-artifacts/spool.db --stats >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        
+        echo "" >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        echo "Generated Files:" >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        ls -la /tmp/qa-${{ matrix.mode }}-payloads/ >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        
+        echo "" >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        echo "File Sizes:" >> /tmp/qa-${{ matrix.mode }}-summary.txt  
+        du -h /tmp/qa-${{ matrix.mode }}-payloads/* >> /tmp/qa-${{ matrix.mode }}-summary.txt
+        
+    - name: Upload test summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-${{ matrix.mode }}-summary
+        path: /tmp/qa-${{ matrix.mode }}-summary.txt
+        retention-days: 14

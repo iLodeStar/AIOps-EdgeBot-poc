@@ -224,8 +224,14 @@ EdgeBot includes command-line tools for importing historical data and exporting 
 Import CSV files containing weather data into the message buffer:
 
 ```bash
-# Import CSV with SQLite persistence
+# Basic import with SQLite persistence
 python tools/import_weather_csv.py samples/weather_data.csv
+
+# Import from stdin
+cat samples/weather_data.csv | python tools/import_weather_csv.py --stdin
+
+# Import with timezone conversion (naive timestamps as local time)
+python tools/import_weather_csv.py --tz Asia/Kolkata samples/weather_data.csv
 
 # Import to in-memory buffer
 python tools/import_weather_csv.py --use-memory samples/weather_data.csv
@@ -234,18 +240,28 @@ python tools/import_weather_csv.py --use-memory samples/weather_data.csv
 python tools/import_weather_csv.py --dry-run samples/weather_data.csv
 ```
 
+**New flags:**
+- `--stdin` - Read from stdin instead of file
+- `--tz TIMEZONE` - IANA timezone for naive timestamps (e.g., Asia/Kolkata)
+
 Expected CSV columns:
 - `timestamp`, `latitude`, `longitude`, `city`
 - `temperature_celsius`, `humidity_percent`, `wind_speed_kmh`
 - `wind_direction_degrees`, `pressure_hpa`, `weather_description`
 
-### Importing JSONL Syslog Events
+### Importing JSONL Events (Syslog & SNMP)
 
-Import JSONL files containing structured syslog events:
+Import JSONL files containing structured syslog events or SNMP metrics:
 
 ```bash
-# Import all events
-python tools/import_jsonl_events.py samples/syslog_events.jsonl
+# Import syslog events with severity mapping
+python tools/import_jsonl_events.py --record-type syslog_event --map-severity samples/syslog_events.jsonl
+
+# Import SNMP metrics with percent-to-ratio conversion
+python tools/import_jsonl_events.py --record-type snmp_metric --percent-as-ratio samples/snmp_metrics.jsonl
+
+# Import from stdin with timezone conversion
+cat samples/syslog_events.jsonl | python tools/import_jsonl_events.py --stdin --tz UTC
 
 # Import first 100 events only
 python tools/import_jsonl_events.py --max-lines 100 samples/syslog_events.jsonl
@@ -254,10 +270,26 @@ python tools/import_jsonl_events.py --max-lines 100 samples/syslog_events.jsonl
 python tools/import_jsonl_events.py --dry-run --max-lines 5 samples/syslog_events.jsonl
 ```
 
-Expected JSONL fields:
+**New flags:**
+- `--stdin` - Read from stdin instead of file
+- `--record-type {syslog_event,snmp_metric}` - Type of records to import (default: syslog_event)
+- `--tz TIMEZONE` - IANA timezone for naive timestamps
+- `--map-severity` - Add numeric severity_num field for syslog events (RFC5424 mapping)
+- `--percent-as-ratio` - Add value_ratio field for SNMP metrics with unit=%
+
+**Syslog Event Fields:**
 - `timestamp`, `host`, `message`
 - `facility`, `severity`, `program`, `pid`
 - Additional fields are preserved as `extra_*`
+
+**SNMP Metric Fields:**
+- `timestamp`, `host`, `oid`, `metric_name`
+- `value`, `unit`, `interface`, `community`, `snmp_version`
+- Additional fields are preserved as `extra_*`
+
+**Severity Mapping (--map-severity):**
+- emergency/emerg: 0, alert: 1, critical/crit: 2, error/err: 3
+- warning/warn: 4, notice: 5, informational/info: 6, debug: 7
 
 ### Database Inspection
 
