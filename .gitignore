@@ -205,3 +205,43 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# EdgeNetIQ extras
+edge_node/edge_cache.db
+central_platform/data/central.db
+*.db-journal
+*.sqlite-journal
+
+# Local TLS materials
+scripts/certs/
+*.pem
+*.crt
+*.key
+
+# Environment files
+.env
+*.env
+.envrc
+
+# IDE/OS
+.idea/
+.vscode/
+.history
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/
+docker-compose.override.yml
+
+# Datasets (keep samples tracked; ignore generated/heavy)
+datasets/tmp/
+datasets/generated/
+datasets/*.parquet
+datasets/*.csv.gz
+
+# Notebooks and reports
+.ipynb_checkpoints/
+*.ipynb
+reports/
+junit.xml
