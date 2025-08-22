@@ -97,6 +97,12 @@ fetch_repo_if_missing() {
 prepare_files_and_folders() {
   header "Preparing configuration and data directories"
   mkdir -p "${DATA_DIR_REL}/out" "${DATA_DIR_REL}/logs"
+  
+  # Fix permissions for EdgeBot user (UID 999 in container)
+  if command -v chown >/dev/null 2>&1; then
+    ${SUDO} chown -R 999:999 "${DATA_DIR_REL}" 2>/dev/null || true
+  fi
+  
   if [ ! -f "${ENV_FILE}" ]; then
     if [ -f "${ENV_EXAMPLE}" ]; then
       cp -n "${ENV_EXAMPLE}" "${ENV_FILE}"
