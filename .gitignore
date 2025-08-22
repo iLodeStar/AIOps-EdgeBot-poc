@@ -249,3 +249,9 @@ datasets/*.csv.gz
 *.ipynb
 reports/
 junit.xml
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+test-output.txt
+coverage.xml

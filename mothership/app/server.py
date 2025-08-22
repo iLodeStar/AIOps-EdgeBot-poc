@@ -1,198 +1,401 @@
-"""FastAPI server for the mothership with data ingestion and health endpoints."""
-
+"""FastAPI-based ingestion service for mothership with dual-sink support."""
 import asyncio
-import gzip
-import json
-from typing import Dict, Any, List
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request, HTTPException, Response, status
-from fastapi.responses import JSONResponse
+import time
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field, ValidationError
 import structlog
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
-from .config import get_config, AppConfig
-from .storage import SinksManager
+from .config import ConfigManager
+from .pipeline.processor import Pipeline
+from .pipeline.processors_redaction import RedactionPipeline, PIISafetyValidator
+from .pipeline.processors_enrich import (
+    AddTagsProcessor, SeverityMapProcessor, ServiceFromPathProcessor,
+    GeoHintProcessor, SiteEnvTagsProcessor, TimestampNormalizer
+)
+from .pipeline.llm_enricher import LLMEnricher
+from .storage.tsdb import TimescaleDBWriter
+# Import dual-sink components
+from .storage.sinks import SinksManager  # NEW: dual-sink support
+from .storage.loki import LokiClient  # NEW: Loki support
 
-logger = structlog.get_logger(__name__)
-
-# Global state
-app_config: AppConfig = None
-sinks_manager: SinksManager = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan manager for startup/shutdown."""
-    global app_config, sinks_manager
-    
-    # Startup
-    logger.info("Starting mothership server")
-    
-    app_config = get_config()
-    sinks_manager = SinksManager(app_config)
-    await sinks_manager.start()
-    
-    logger.info("Mothership server started successfully",
-               enabled_sinks=app_config.get_enabled_sinks())
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down mothership server")
-    if sinks_manager:
-        await sinks_manager.stop()
-    logger.info("Mothership server shutdown complete")
-
-
-app = FastAPI(
-    title="EdgeBot Mothership",
-    description="Data collection and storage service for EdgeBot telemetry",
-    version="1.0.0",
-    lifespan=lifespan
+# Configure logging
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.JSONRenderer()
+    ],
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
 )
 
+logger = structlog.get_logger()
 
-@app.post("/ingest")
-async def ingest_data(request: Request) -> JSONResponse:
-    """Ingest data from EdgeBot nodes."""
+# Prometheus metrics
+INGESTION_REQUESTS = Counter('mothership_ingestion_requests_total', 'Total ingestion requests', ['status'])
+INGESTION_EVENTS = Counter('mothership_ingestion_events_total', 'Total events processed')
+INGESTION_DURATION = Histogram('mothership_ingestion_duration_seconds', 'Request processing duration')
+PIPELINE_DURATION = Histogram('mothership_pipeline_duration_seconds', 'Pipeline processing duration')
+DATABASE_WRITES = Counter('mothership_database_writes_total', 'Total database writes', ['status'])
+ACTIVE_CONNECTIONS = Gauge('mothership_active_connections', 'Active database connections')
+# NEW: dual-sink metrics
+SINK_WRITES = Counter('mothership_sink_writes_total', 'Total sink writes', ['sink', 'status'])
+LOKI_QUEUE_SIZE = Gauge('mothership_loki_queue_size', 'Loki batch queue size')
+
+# Pydantic models
+class Event(BaseModel):
+    """Individual event model."""
+    timestamp: Optional[str] = None
+    type: str = Field(..., description="Event type (syslog, log, snmp, flow, nmea, weather)")
+    source: Optional[str] = None
+    message: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+
+    class Config:
+        extra = "allow"  # Allow additional fields
+
+class IngestRequest(BaseModel):
+    """Ingest request containing array of events."""
+    messages: List[Event] = Field(..., description="Array of events to ingest")
+    batch_metadata: Optional[Dict[str, Any]] = None
+
+class IngestResponse(BaseModel):
+    """Ingest response with dual-sink support."""
+    status: str
+    processed_events: int
+    processing_time: float
+    sink_results: Dict[str, Dict[str, Any]]  # NEW: per-sink results
+    errors: Optional[List[str]] = None
+
+class HealthResponse(BaseModel):
+    """Health check response with dual-sink status."""
+    status: str
+    timestamp: str
+    version: str
+    database: bool
+    sinks: Dict[str, Dict[str, Any]]  # NEW: per-sink health
+    enabled_sinks: List[str]  # NEW: list of enabled sinks
+    pipeline_processors: List[str]
+
+# Global state
+app_state = {
+    'config_manager': None,
+    'pipeline': None,
+    'tsdb_writer': None,
+    'sinks_manager': None,  # NEW: dual-sink manager
+    'startup_time': time.time()
+}
+
+# FastAPI app
+app = FastAPI(
+    title="Mothership Data Processor",
+    description="Centralized data processing and ingestion service for AIOps EdgeBot with dual-sink support",
+    version="1.5.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application on startup with dual-sink support."""
     try:
-        # Handle gzip-compressed content
-        body = await request.body()
-        if request.headers.get("content-encoding") == "gzip":
-            body = gzip.decompress(body)
+        logger.info("Starting Mothership service")
         
-        # Parse JSON payload
-        try:
-            payload = json.loads(body.decode('utf-8'))
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.warning("Invalid JSON payload", error=str(e))
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid JSON payload"
+        # Load configuration
+        config_manager = ConfigManager()
+        config = config_manager.load_config()
+        app_state['config_manager'] = config_manager
+        
+        # Configure logging level
+        log_level = config.get('logging', {}).get('level', 'INFO')
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(
+                getattr(structlog.stdlib.LoggingLogLevel, log_level)
             )
+        )
         
-        # Validate payload structure
-        if not isinstance(payload, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Payload must be a JSON object"
-            )
+        # Initialize TimescaleDB writer
+        db_config = config['database']
+        tsdb_writer = TimescaleDBWriter(db_config)
+        await tsdb_writer.initialize()
+        app_state['tsdb_writer'] = tsdb_writer
         
-        messages = payload.get("messages", [])
-        if not isinstance(messages, list):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Messages must be an array"
-            )
+        # NEW: Initialize dual-sink manager
+        sinks_manager = SinksManager(config)
+        await sinks_manager.start()
+        app_state['sinks_manager'] = sinks_manager
         
-        if not messages:
-            logger.debug("Empty message batch received")
-            return JSONResponse({
-                "status": "success",
-                "received": 0,
-                "written": 0,
-                "sink_results": {}
-            })
+        # Initialize processing pipeline
+        pipeline = Pipeline(config['pipeline'])
         
-        # Log ingest details
-        batch_info = {
-            "messages": len(messages),
-            "batch_size": payload.get("batch_size"),
-            "timestamp": payload.get("timestamp"),
-            "source": payload.get("source"),
-            "is_retry": payload.get("is_retry", False)
-        }
-        logger.info("Data batch received", **batch_info)
+        # Add processors in order (redaction FIRST for PII safety)
+        processor_config = config['pipeline']['processors']
         
-        # Sanitize messages (remove internal fields)
-        sanitized_messages = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                # Remove internal fields that start with underscore
-                sanitized_msg = {k: v for k, v in msg.items() 
-                               if not k.startswith('_')}
-                if sanitized_msg:  # Only add non-empty messages
-                    sanitized_messages.append(sanitized_msg)
+        # 1. Redaction pipeline (MUST be first)
+        if processor_config.get('redaction', {}).get('enabled', True):
+            redaction_processor = RedactionPipeline(processor_config)
+            pipeline.add_processor(redaction_processor)
+            
+            # Add PII safety validator
+            pii_validator = PIISafetyValidator({'strict_mode': False})
+            pipeline.add_processor(pii_validator)
         
-        logger.debug("Messages sanitized", 
-                    original=len(messages), 
-                    sanitized=len(sanitized_messages))
+        # 2. Deterministic enrichment
+        if processor_config.get('enrichment', {}).get('enabled', True):
+            enrich_config = processor_config['enrichment']
+            
+            # Add tags
+            if enrich_config.get('add_tags'):
+                add_tags_processor = AddTagsProcessor(enrich_config)
+                pipeline.add_processor(add_tags_processor)
+            
+            # Severity mapping
+            severity_processor = SeverityMapProcessor(enrich_config)
+            pipeline.add_processor(severity_processor)
+            
+            # Service extraction
+            service_processor = ServiceFromPathProcessor({})
+            pipeline.add_processor(service_processor)
+            
+            # Geographic hints
+            geo_processor = GeoHintProcessor({})
+            pipeline.add_processor(geo_processor)
+            
+            # Site/environment tags
+            site_processor = SiteEnvTagsProcessor({})
+            pipeline.add_processor(site_processor)
+            
+            # Timestamp normalization
+            timestamp_processor = TimestampNormalizer({})
+            pipeline.add_processor(timestamp_processor)
         
-        # Write to all enabled sinks
-        sink_results = await sinks_manager.write_events(sanitized_messages)
+        # 3. LLM enrichment (optional, with circuit breaker)
+        if config.get('llm', {}).get('enabled', False):
+            llm_processor = LLMEnricher(config['llm'])
+            pipeline.add_processor(llm_processor)
         
-        # Calculate totals
-        total_written = sum(result.get("written", 0) for result in sink_results.values())
-        total_errors = sum(result.get("errors", 0) for result in sink_results.values())
+        app_state['pipeline'] = pipeline
         
-        # Return response with per-sink counts
-        response_data = {
-            "status": "success",
-            "received": len(messages),
-            "sanitized": len(sanitized_messages),
-            "written": total_written,
-            "errors": total_errors,
-            "sink_results": sink_results
-        }
+        logger.info("Mothership service started successfully", 
+                   enabled_sinks=config_manager.get_enabled_sinks(),
+                   pipeline_processors=[p.__class__.__name__ for p in pipeline.processors])
         
-        logger.info("Ingest completed", **response_data)
-        return JSONResponse(response_data)
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error("Ingest error", error=str(e))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error"
-        )
+        logger.error("Failed to start Mothership service", error=str(e))
+        raise
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown."""
+    logger.info("Shutting down Mothership service")
+    
+    # Stop dual-sink manager
+    if app_state['sinks_manager']:
+        await app_state['sinks_manager'].stop()
+    
+    # Close database connection
+    if app_state['tsdb_writer']:
+        await app_state['tsdb_writer'].close()
+    
+    logger.info("Mothership service shut down complete")
 
-@app.get("/health")
-async def health_check() -> JSONResponse:
-    """Health check endpoint including sink status."""
+@app.post("/ingest", response_model=IngestResponse)
+@INGESTION_DURATION.time()
+async def ingest_events(request: IngestRequest) -> IngestResponse:
+    """Ingest events for processing with dual-sink support."""
+    start_time = time.time()
+    
     try:
-        health_status = sinks_manager.get_health_status()
+        events = request.messages
+        if not events:
+            INGESTION_REQUESTS.labels(status='empty').inc()
+            return IngestResponse(
+                status="success",
+                processed_events=0,
+                processing_time=time.time() - start_time,
+                sink_results={}
+            )
         
-        status_code = (
-            status.HTTP_200_OK if health_status["healthy"] 
-            else status.HTTP_503_SERVICE_UNAVAILABLE
+        logger.info(f"Processing {len(events)} events")
+        INGESTION_EVENTS.inc(len(events))
+        
+        # Process events through pipeline
+        pipeline = app_state['pipeline']
+        processed_events = []
+        
+        with PIPELINE_DURATION.time():
+            for event in events:
+                try:
+                    # Convert to dict for pipeline processing
+                    event_dict = event.dict()
+                    processed_event = await pipeline.process_event(event_dict)
+                    processed_events.append(processed_event)
+                except Exception as e:
+                    logger.error(f"Error processing event: {e}", event=event_dict)
+                    continue
+        
+        # Store in dual-sink architecture
+        sinks_manager = app_state['sinks_manager']
+        sink_results = await sinks_manager.write_events(processed_events)
+        
+        # Update metrics
+        for sink_name, result in sink_results.items():
+            SINK_WRITES.labels(sink=sink_name, status='success').inc(result.get('written', 0))
+            if result.get('errors', 0) > 0:
+                SINK_WRITES.labels(sink=sink_name, status='error').inc(result.get('errors', 0))
+        
+        # Update Loki queue size metric if Loki is enabled
+        if 'loki' in sink_results:
+            LOKI_QUEUE_SIZE.set(sink_results['loki'].get('queued', 0))
+        
+        processing_time = time.time() - start_time
+        INGESTION_REQUESTS.labels(status='success').inc()
+        
+        logger.info(f"Successfully processed {len(processed_events)} events", 
+                   processing_time=processing_time,
+                   sink_results=sink_results)
+        
+        return IngestResponse(
+            status="success",
+            processed_events=len(processed_events),
+            processing_time=processing_time,
+            sink_results=sink_results
         )
         
-        response_data = {
-            "status": "healthy" if health_status["healthy"] else "unhealthy",
-            "timestamp": int(asyncio.get_event_loop().time()),
-            **health_status
-        }
+    except Exception as e:
+        INGESTION_REQUESTS.labels(status='error').inc()
+        logger.error("Error during ingestion", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/healthz", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    """Health check endpoint with dual-sink status."""
+    try:
+        # Check database connectivity
+        tsdb_writer = app_state.get('tsdb_writer')
+        database_healthy = tsdb_writer is not None and await tsdb_writer.health_check()
         
-        return JSONResponse(response_data, status_code=status_code)
+        # Check sink health
+        sinks_manager = app_state['sinks_manager']
+        sink_health = {}
+        enabled_sinks = []
+        
+        if sinks_manager:
+            # Check each sink
+            for sink_name in sinks_manager.get_sink_names():
+                sink = sinks_manager.get_sink(sink_name)
+                if sink:
+                    is_healthy = await sink.health_check()
+                    sink_health[sink_name] = {
+                        'healthy': is_healthy,
+                        'enabled': sink.is_enabled()
+                    }
+                    if sink.is_enabled():
+                        enabled_sinks.append(sink_name)
+        
+        # Get pipeline processors
+        pipeline = app_state.get('pipeline')
+        processors = [p.__class__.__name__ for p in pipeline.processors] if pipeline else []
+        
+        overall_status = "healthy" if database_healthy else "degraded"
+        
+        return HealthResponse(
+            status=overall_status,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            version="1.5.0",
+            database=database_healthy,
+            sinks=sink_health,
+            enabled_sinks=enabled_sinks,
+            pipeline_processors=processors
+        )
         
     except Exception as e:
         logger.error("Health check error", error=str(e))
-        return JSONResponse(
-            {
-                "status": "error",
-                "error": str(e)
-            },
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+        return HealthResponse(
+            status="unhealthy",
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            version="1.5.0",
+            database=False,
+            sinks={},
+            enabled_sinks=[],
+            pipeline_processors=[]
         )
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    # Update active connections gauge
+    if app_state.get('tsdb_writer'):
+        ACTIVE_CONNECTIONS.set(app_state['tsdb_writer'].get_active_connections())
+    
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@app.get("/stats")
+async def get_stats() -> Dict[str, Any]:
+    """Detailed service statistics with dual-sink info."""
+    uptime = time.time() - app_state['startup_time']
+    
+    # Get pipeline stats
+    pipeline = app_state.get('pipeline')
+    pipeline_stats = {}
+    if pipeline:
+        for processor in pipeline.processors:
+            processor_name = processor.__class__.__name__
+            if hasattr(processor, 'get_stats'):
+                pipeline_stats[processor_name] = processor.get_stats()
+            else:
+                pipeline_stats[processor_name] = {"processed": "N/A"}
+    
+    # Get sink stats
+    sink_stats = {}
+    sinks_manager = app_state.get('sinks_manager')
+    if sinks_manager:
+        for sink_name in sinks_manager.get_sink_names():
+            sink = sinks_manager.get_sink(sink_name)
+            if sink and hasattr(sink, 'get_stats'):
+                sink_stats[sink_name] = sink.get_stats()
+    
+    return {
+        "service": {
+            "uptime": uptime,
+            "version": "1.5.0"
+        },
+        "pipeline": {
+            "processors": pipeline_stats
+        },
+        "sinks": sink_stats,
+        "database": {
+            "active_connections": app_state.get('tsdb_writer', {}).get_active_connections() if app_state.get('tsdb_writer') else 0
+        }
+    }
 
 @app.get("/")
-async def root() -> JSONResponse:
-    """Root endpoint with basic server information."""
-    return JSONResponse({
-        "service": "EdgeBot Mothership",
-        "version": "1.0.0",
-        "status": "running",
+async def root():
+    """Root endpoint with service information."""
+    return {
+        "service": "Mothership Data Processor",
+        "version": "1.5.0",
+        "description": "Centralized data processing and ingestion service with dual-sink support",
         "endpoints": {
             "ingest": "/ingest",
-            "health": "/health"
-        },
-        "enabled_sinks": app_config.get_enabled_sinks() if app_config else []
-    })
+            "health": "/healthz",
+            "metrics": "/metrics",
+            "stats": "/stats",
+            "docs": "/docs"
+        }
+    }
 
-
+# Development server runner
 if __name__ == "__main__":
     import uvicorn
     import os
@@ -212,11 +415,15 @@ if __name__ == "__main__":
         cache_logger_on_first_use=True,
     )
     
-    config = get_config()
+    config_manager = ConfigManager()
+    config = config_manager.load_config()
+    
+    server_config = config.get('server', {})
     uvicorn.run(
-        "server:app",
-        host=config.server.host,
-        port=config.server.port,
-        log_level=config.log_level.lower(),
-        access_log=True
+        "app.server:app",
+        host=server_config.get('host', '0.0.0.0'),
+        port=server_config.get('port', 8443),
+        log_level=config.get('logging', {}).get('level', 'INFO').lower(),
+        access_log=True,
+        reload=os.getenv('DEV_MODE', 'false').lower() == 'true'
     )

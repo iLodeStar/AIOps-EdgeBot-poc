@@ -1,4 +1,4 @@
-"""Storage module initialization."""
+"""Storage modules for TSDB and dual-sink persistence."""
 
 from .loki import LokiClient
 from .sinks import SinksManager, TSDBSink, LokiSink

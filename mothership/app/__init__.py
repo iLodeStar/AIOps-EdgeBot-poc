@@ -1,6 +1,6 @@
-"""Application module initialization."""
+"""Mothership data processing and ingestion service with dual-sink support."""
 
-from .config import get_config, AppConfig, LokiConfig, TSDBConfig
+from .config import ConfigManager
 from .server import app
 
-__all__ = ["get_config", "AppConfig", "LokiConfig", "TSDBConfig", "app"]
+__all__ = ["ConfigManager", "app"]

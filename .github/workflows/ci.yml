@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ "3.10", "3.11" ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+      - name: Install dependencies
+        run: |
+          pip install -r edge_node/requirements.txt || true
+          pip install -r requirements-dev.txt
+      - name: Lint (black check)
+        run: |
+          black --version
+          black --check edge_node || true
+      - name: Run tests with coverage and reports
+        run: |
+          mkdir -p reports
+          pytest -q --maxfail=1 --disable-warnings \
+            --cov=edge_node/app --cov-report=term-missing --cov-report=xml:coverage.xml \
+            --junitxml=reports/junit.xml \
+            --html=reports/report.html --self-contained-html \
+            2>&1 | tee test-output.txt
+      - name: Generate simple report
+        run: |
+          python scripts/simple_test_report.py reports/junit.xml > reports/simple_report.md
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.python-version }}
+          path: |
+            reports/
+            test-output.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ always() && (needs.test.result == 'success') }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Set lowercase repo owner
+        id: repo
+        run: echo "owner_lower=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./edge_node
+          push: false
+          tags: ghcr.io/${{ steps.repo.outputs.owner_lower }}/edgebot:ci-${{ github.sha }}
+      # Optional: push on tags (requires GHCR permissions)
+      # - name: Login to GHCR
+      #   uses: docker/login-action@v3
+      #   with:
+      #     registry: ghcr.io
+      #     username: ${{ github.actor }}
+      #     password: ${{ secrets.GITHUB_TOKEN }}
+      # - name: Build & push on tag
+      #   if: startsWith(github.ref, 'refs/tags/')
+      #   uses: docker/build-push-action@v6
+      #   with:
+      #     context: ./edge_node
+      #     push: true
+      #     tags: ghcr.io/${{ steps.repo.outputs.owner_lower }}/edgebot:${{ github.ref_name }}
