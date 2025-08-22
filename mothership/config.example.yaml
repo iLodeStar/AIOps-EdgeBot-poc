@@ -1,0 +1,162 @@
+# Mothership Configuration Example
+# Copy to config.yaml and customize for your deployment
+
+server:
+  host: "0.0.0.0"
+  port: 8443
+
+# Database configuration - TimescaleDB (PostgreSQL compatible)
+database:
+  # Option 1: Use full DSN (recommended)
+  dsn: "postgresql://mothership:mothership@localhost:5432/mothership"
+  
+  # Option 2: Individual parameters (if DSN not provided)
+  # host: "localhost"
+  # port: 5432
+  # database: "mothership"
+  # user: "mothership"
+  # password: "mothership"
+  
+  # Connection pool settings
+  pool_min_size: 5
+  pool_max_size: 20
+  connection_timeout: 30
+  
+  # Table settings
+  table_name: "events"
+  chunk_interval: "1 day"
+  
+  # Batch settings
+  batch_size: 1000
+  batch_timeout: 5.0
+
+# Processing pipeline configuration
+pipeline:
+  processors:
+    # REDACTION (runs FIRST for PII safety)
+    redaction:
+      enabled: true
+      
+      # Fields to completely remove
+      drop_fields:
+        - "password"
+        - "passwd" 
+        - "secret"
+        - "token"
+        - "key"
+        - "credential"
+        - "auth"
+      
+      # Regex patterns to mask in text
+      mask_patterns:
+        - "password\\s*[=:]\\s*\\S+"
+        - "token\\s*[=:]\\s*\\S+"
+        - "key\\s*[=:]\\s*\\S+"
+        - "\\b\\d{3}-\\d{2}-\\d{4}\\b"  # US SSN
+        - "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"  # Credit card
+        - "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"  # Email (optional)
+      
+      mask_char: "*"
+      mask_length: 8
+      
+      # Fields to hash for pseudonymization
+      hash_fields:
+        - "username" 
+        - "user"
+        - "email"
+        - "client_ip"
+      
+      salt: "change-this-secret-salt"
+      hash_algorithm: "sha256"
+      preserve_original: false
+    
+    # ENRICHMENT (deterministic)
+    enrichment:
+      enabled: true
+      
+      # Static tags to add
+      add_tags:
+        processed_by: "mothership"
+        version: "1.5"
+        deployment: "production"
+      
+      # String severity to numeric mapping
+      severity_mapping:
+        emergency: 0
+        emerg: 0
+        alert: 1
+        critical: 2
+        crit: 2
+        error: 3
+        err: 3
+        fatal: 3
+        warning: 4
+        warn: 4
+        notice: 5
+        informational: 6
+        info: 6
+        debug: 7
+      
+      # Service extraction patterns
+      path_patterns:
+        - ["/var/log/nginx/", "nginx"]
+        - ["/var/log/apache/", "apache"]  
+        - ["/var/log/mysql/", "mysql"]
+        - ["/var/log/postgresql/", "postgresql"]
+        - ["/var/log/redis/", "redis"]
+        - ["/var/log/docker/", "docker"]
+        - ["/opt/([^/]+)/", "\\1"]
+      
+      # Geo hints (optional)
+      geo_hints:
+        # Static IP mappings
+        ip_location_map:
+          "10.0.1.100": {"datacenter": "us-east-1", "region": "production"}
+          "10.0.2.100": {"datacenter": "us-west-1", "region": "staging"}
+        
+        # Subnet mappings  
+        subnet_location_map:
+          "10.0.1.0/24": {"datacenter": "us-east-1", "region": "production"}
+          "10.0.2.0/24": {"datacenter": "us-west-1", "region": "staging"}
+      
+      # Site/environment extraction from hostnames
+      site_env_tags:
+        site_patterns:
+          - ["\\.(\\w+)\\.(prod|production)\\.", {"env": "production", "site": "\\1"}]
+          - ["\\.(\\w+)\\.(dev|development)\\.", {"env": "development", "site": "\\1"}]
+          - ["\\.(\\w+)\\.(test|testing)\\.", {"env": "test", "site": "\\1"}]
+          - ["\\.(\\w+)\\.(stage|staging)\\.", {"env": "staging", "site": "\\1"}]
+        
+        default_site: "default"
+        default_env: "unknown"
+      
+      # Timestamp normalization
+      timestamp_fields: ["timestamp", "time", "@timestamp", "ts"]
+      default_timezone: "UTC"
+
+# LLM-assisted enrichment (OPTIONAL - disabled by default for safety)
+llm:
+  enabled: false  # Set to true to enable LLM enrichment
+  
+  # OpenAI-compatible endpoint
+  endpoint: "https://api.openai.com/v1"
+  api_key: null  # Set via MOTHERSHIP_LLM_API_KEY environment variable
+  model: "gpt-3.5-turbo"
+  
+  # Safety parameters
+  confidence_threshold: 0.8  # Only apply results with high confidence
+  max_tokens: 150           # Limit response size
+  temperature: 0.0          # Deterministic responses
+  max_event_size: 10000     # Max event size for LLM processing (chars)
+  timeout: 30               # Request timeout seconds
+  
+  # Circuit breaker for reliability
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5    # Trip after N failures
+    reset_timeout: 60       # Reset after N seconds
+
+# Logging configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  structured: true
