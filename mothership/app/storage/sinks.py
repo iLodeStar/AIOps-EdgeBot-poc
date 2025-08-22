@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 import structlog
 
 from .loki import LokiClient
-from ..config import AppConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -34,13 +33,13 @@ class StorageSink(Protocol):
 class TSDBSink:
     """TimescaleDB sink wrapper (placeholder implementation)."""
     
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self._healthy = False
         
     async def start(self):
         """Start the TSDB sink."""
-        if not self.config.enabled:
+        if not self.config.get('enabled', True):
             logger.debug("TSDB sink disabled, not starting")
             return
             
@@ -48,8 +47,7 @@ class TSDBSink:
         # For now, simulate successful start
         self._healthy = True
         logger.info("TSDB sink started (placeholder)",
-                   host=self.config.host,
-                   database=self.config.database)
+                   enabled=self.config.get('enabled', True))
     
     async def stop(self):
         """Stop the TSDB sink."""
@@ -59,7 +57,7 @@ class TSDBSink:
     
     async def write_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Write events to TimescaleDB."""
-        if not self.config.enabled or not events:
+        if not self.config.get('enabled', True) or not events:
             return {"written": 0, "errors": 0}
             
         # TODO: Implement actual database writes
@@ -67,15 +65,23 @@ class TSDBSink:
         logger.debug("TSDB write (placeholder)", events=len(events))
         return {"written": len(events), "errors": 0}
     
+    async def health_check(self) -> bool:
+        """Check if TSDB sink is healthy."""
+        return self._healthy and self.config.get('enabled', True)
+    
+    def is_enabled(self) -> bool:
+        """Check if sink is enabled."""
+        return self.config.get('enabled', True)
+    
     def is_healthy(self) -> bool:
         """Check if TSDB sink is healthy."""
-        return self._healthy and self.config.enabled
+        return self._healthy and self.config.get('enabled', True)
 
 
 class LokiSink:
     """Loki sink wrapper."""
     
-    def __init__(self, config):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.client = LokiClient(config)
     
@@ -91,24 +97,38 @@ class LokiSink:
         """Write events to Loki."""
         return await self.client.write_events(events)
     
+    async def health_check(self) -> bool:
+        """Check if Loki sink is healthy."""
+        # For now, just check if it's enabled
+        # TODO: Add actual health check (ping Loki /ready endpoint)
+        return self.config.get('enabled', False)
+    
+    def is_enabled(self) -> bool:
+        """Check if sink is enabled."""
+        return self.config.get('enabled', False)
+    
     def is_healthy(self) -> bool:
         """Check if Loki sink is healthy."""
-        return self.config.enabled
+        # For now, just check if it's enabled
+        # TODO: Add actual health check (ping Loki /ready endpoint)
+        return self.config.get('enabled', False)
 
 
 class SinksManager:
     """Manages writes to multiple storage sinks."""
     
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.sinks: Dict[str, StorageSink] = {}
         
         # Initialize sinks based on configuration
-        if config.tsdb.enabled:
-            self.sinks["tsdb"] = TSDBSink(config.tsdb)
+        sinks_config = config.get('sinks', {})
+        
+        if sinks_config.get('timescaledb', {}).get('enabled', True):
+            self.sinks["tsdb"] = TSDBSink(sinks_config.get('timescaledb', {}))
             
-        if config.loki.enabled:
-            self.sinks["loki"] = LokiSink(config.loki)
+        if sinks_config.get('loki', {}).get('enabled', False):
+            self.sinks["loki"] = LokiSink(sinks_config.get('loki', {}))
     
     async def start(self):
         """Start all enabled sinks."""
@@ -202,3 +222,11 @@ class SinksManager:
             "enabled_sinks": list(self.sinks.keys()),
             "sink_count": len(self.sinks)
         }
+    
+    def get_sink_names(self) -> List[str]:
+        """Get names of all configured sinks."""
+        return list(self.sinks.keys())
+    
+    def get_sink(self, name: str) -> Optional[StorageSink]:
+        """Get a specific sink by name."""
+        return self.sinks.get(name)

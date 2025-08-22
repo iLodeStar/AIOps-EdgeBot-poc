@@ -7,7 +7,6 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
 import httpx
 import structlog
-from ..config import LokiConfig
 
 logger = structlog.get_logger(__name__)
 
@@ -26,7 +25,7 @@ class LokiClient:
         "ip", "user_id", "filename", "line", "pid", "thread_id"
     }
     
-    def __init__(self, config: LokiConfig):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.client: Optional[httpx.AsyncClient] = None
         self._batch_queue: List[Dict[str, Any]] = []
@@ -37,23 +36,23 @@ class LokiClient:
         
     async def start(self):
         """Start the Loki client and batch processing."""
-        if not self.config.enabled:
+        if not self.config.get('enabled', False):
             logger.debug("Loki client disabled, not starting")
             return
             
         # Configure HTTP client
         auth = None
-        if self.config.username and self.config.password:
-            auth = (self.config.username, self.config.password)
+        if self.config.get('username') and self.config.get('password'):
+            auth = (self.config['username'], self.config['password'])
             
         headers = {"Content-Type": "application/json"}
-        if self.config.tenant_id:
-            headers["X-Scope-OrgID"] = self.config.tenant_id
+        if self.config.get('tenant_id'):
+            headers["X-Scope-OrgID"] = self.config['tenant_id']
             
         self.client = httpx.AsyncClient(
             auth=auth,
             headers=headers,
-            timeout=self.config.timeout_seconds
+            timeout=self.config.get('timeout_seconds', 30.0)
         )
         
         # Start background flush task
@@ -61,10 +60,10 @@ class LokiClient:
         self._flush_task = asyncio.create_task(self._flush_loop())
         
         logger.info("Loki client started", 
-                   url=self.config.url,
-                   batch_size=self.config.batch_size,
+                   url=self.config.get('url', 'http://localhost:3100'),
+                   batch_size=self.config.get('batch_size', 100),
                    has_auth=bool(auth),
-                   tenant_id=self.config.tenant_id)
+                   tenant_id=self.config.get('tenant_id'))
     
     async def stop(self):
         """Stop the Loki client and flush remaining events."""
@@ -87,7 +86,7 @@ class LokiClient:
     
     async def write_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Write events to Loki, returning stats."""
-        if not self.config.enabled or not events:
+        if not self.config.get('enabled', False) or not events:
             return {"written": 0, "queued": 0, "errors": 0}
             
         written = 0
@@ -109,7 +108,7 @@ class LokiClient:
                     errors += 1
             
             # Flush if batch is full
-            if len(self._batch_queue) >= self.config.batch_size:
+            if len(self._batch_queue) >= self.config.get('batch_size', 100):
                 flush_result = await self._flush_batch()
                 written = flush_result.get("written", 0)
         
@@ -199,7 +198,7 @@ class LokiClient:
                 current_time = time.time()
                 should_flush = (
                     len(self._batch_queue) > 0 and 
-                    current_time - self._last_flush >= self.config.batch_timeout_seconds
+                    current_time - self._last_flush >= self.config.get('batch_timeout_seconds', 5.0)
                 )
                 
                 if should_flush:
@@ -252,9 +251,9 @@ class LokiClient:
         
         # Send to Loki with retries
         last_error = None
-        for attempt in range(self.config.max_retries + 1):
+        for attempt in range(self.config.get('max_retries', 3) + 1):
             try:
-                url = f"{self.config.url.rstrip('/')}/loki/api/v1/push"
+                url = f"{self.config.get('url', 'http://localhost:3100').rstrip('/')}/loki/api/v1/push"
                 response = await self.client.post(url, json=payload)
                 
                 if response.status_code == 204:
@@ -270,8 +269,8 @@ class LokiClient:
                     
             except Exception as e:
                 last_error = e
-                if attempt < self.config.max_retries:
-                    backoff = self.config.retry_backoff_seconds * (2 ** attempt)
+                if attempt < self.config.get('max_retries', 3):
+                    backoff = self.config.get('retry_backoff_seconds', 1.0) * (2 ** attempt)
                     logger.warning("Loki request failed, retrying",
                                  attempt=attempt, backoff=backoff, error=str(e))
                     await asyncio.sleep(backoff)
