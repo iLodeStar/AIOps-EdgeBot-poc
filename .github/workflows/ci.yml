@@ -55,12 +55,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+      - name: Set lowercase repo owner
+        id: repo
+        run: echo "owner_lower=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
       - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: ./edge_node
           push: false
-          tags: ghcr.io/${{ github.repository_owner }}/edgebot:ci-${{ github.sha }}
+          tags: ghcr.io/${{ steps.repo.outputs.owner_lower }}/edgebot:ci-${{ github.sha }}
       # Optional: push on tags (requires GHCR permissions)
       # - name: Login to GHCR
       #   uses: docker/login-action@v3
@@ -74,4 +77,4 @@ jobs:
       #   with:
       #     context: ./edge_node
       #     push: true
-      #     tags: ghcr.io/${{ github.repository_owner }}/edgebot:${{ github.ref_name }}
+      #     tags: ghcr.io/${{ steps.repo.outputs.owner_lower }}/edgebot:${{ github.ref_name }}
