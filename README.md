@@ -1,6 +1,30 @@
-# AIOps-EdgeBot-poc
+# AIOps EdgeBot (Phase 1)
 
-Phase 1 Edge Node Bot implementation for AIOps deployment. This repository contains a lightweight edge node data collector and shipper designed for minimal resource usage, near real-time streaming, and strong security/observability.
+A lightweight edge data collector and shipper. Collects logs and metrics, batches and compresses them, and ships to a server or saves locally. Secure, reliable, and easy to deploy.
+
+Quick Start (One-Click)
+- Linux server with sudo? Run:
+
+```
+curl -fsSL https://raw.githubusercontent.com/iLodeStar/AIOps-EdgeBot-poc/main/deploy.sh | bash
+```
+
+What you get
+- A running EdgeBot container with:
+  - Health check at http://localhost:8081/healthz
+  - Metrics at http://localhost:8081/metrics
+  - Syslog listeners on UDP 5514 and TCP 5515
+  - Output payloads saved under edge_node/data/out
+
+Documentation
+- docs/ADMIN_GUIDE.md — How to deploy, operate, upgrade, and troubleshoot (for non-technical users)
+- docs/DEPLOYMENT.md — Detailed deployment methods (Docker, manual)
+- docs/ARCHITECTURE.md — Design and architecture overview
+- docs/DECISIONS.md — Framework and design decisions
+- docs/USER_GUIDE.md — Using EdgeBot (receiving data, inspecting outputs)
+
+Need help?
+- Open an issue in this repository with details of your environment and what you tried.
 
 ## Phase 1 Implementation
 

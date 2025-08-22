@@ -6,6 +6,7 @@ import os
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+from datetime import datetime
 import structlog
 import click
 import uvloop
@@ -76,7 +77,7 @@ class HealthServer:
         
         health_status = {
             'status': 'healthy',
-            'timestamp': structlog.processors.TimeStamper()._stamper(),
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
             'services': {},
             'version': '1.0.0'
         }
