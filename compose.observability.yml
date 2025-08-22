@@ -1,0 +1,79 @@
+# Local Observability Stack with Loki + Grafana
+# Use this to run Loki and Grafana locally for EdgeBot log analysis
+
+version: '3.8'
+
+services:
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - observability
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  grafana:
+    image: grafana/grafana:10.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - observability
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # Optional: Promtail for log collection (if you want to collect local logs)
+  promtail:
+    image: grafana/promtail:2.9.0
+    profiles:
+      - promtail  # Only start when --profile promtail is used
+    volumes:
+      - /var/log:/var/log:ro
+      - ./promtail/config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - observability
+    depends_on:
+      - loki
+
+volumes:
+  loki-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  observability:
+    driver: bridge
+
+# Usage:
+# 1. Start Loki + Grafana:
+#    docker-compose -f compose.observability.yml up -d
+#
+# 2. Access Grafana:
+#    http://localhost:3000 (admin/admin)
+#
+# 3. Start mothership with Loki enabled:
+#    export LOKI_ENABLED=true
+#    export LOKI_URL=http://localhost:3100
+#    cd mothership && python -m app.server
+#
+# 4. Optional: Start with Promtail for local log collection:
+#    docker-compose -f compose.observability.yml --profile promtail up -d
