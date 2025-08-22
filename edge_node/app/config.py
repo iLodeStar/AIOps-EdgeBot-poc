@@ -153,6 +153,33 @@ class ConfigManager:
                     'city': None,
                     'interval': 3600,
                     'api_timeout': 30
+                },
+                'logs': {
+                    'enabled': False,
+                    'paths': [],
+                    'globs': [],
+                    'from_beginning': False,
+                    'scan_interval': 2,
+                    'read_chunk': 8192
+                },
+                'flows': {
+                    'enabled': False,
+                    'netflow_ports': [2055],
+                    'ipfix_ports': [4739],
+                    'sflow_ports': [6343]
+                },
+                'nmea': {
+                    'enabled': False,
+                    'mode': 'udp',
+                    'bind_address': '0.0.0.0',
+                    'udp_port': 10110,
+                    'tcp_port': 10110
+                },
+                'discovery': {
+                    'enabled': False,
+                    'interval': 300,
+                    'auto_tail_logs': True,
+                    'extra_logs': []
                 }
             },
             'output': {
