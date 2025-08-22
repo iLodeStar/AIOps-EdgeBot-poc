@@ -21,6 +21,10 @@ from config import get_config_manager, get_config
 from inputs.syslog_server import create_syslog_server
 from inputs.snmp_poll import create_snmp_poller
 from inputs.weather import create_weather_poller
+from inputs.file_tailer import FileTailer
+from inputs.flows_listener import FlowsListener
+from inputs.nmea_listener import NMEAListener
+from inputs.service_discovery import ServiceDiscovery
 from output.shipper import create_output_shipper
 
 # Configure structured logging
@@ -266,6 +270,27 @@ class EdgeBotSupervisor:
                     self._message_callback
                 )
                 self.services['weather_poller'] = weather_poller
+            
+            # File logs tailer
+            if inputs_config.get('logs', {}).get('enabled', False):
+                file_tailer = FileTailer(inputs_config['logs'], self._message_callback)
+                self.services['file_tailer'] = file_tailer
+
+            # Network flows
+            if inputs_config.get('flows', {}).get('enabled', False):
+                flows_listener = FlowsListener(inputs_config['flows'], self._message_callback)
+                self.services['flows_listener'] = flows_listener
+
+            # NMEA vessel telemetry
+            if inputs_config.get('nmea', {}).get('enabled', False):
+                nmea_listener = NMEAListener(inputs_config['nmea'], self._message_callback)
+                self.services['nmea_listener'] = nmea_listener
+
+            # Discovery (wire with tailer if present)
+            if inputs_config.get('discovery', {}).get('enabled', False):
+                tailer = self.services.get('file_tailer', None)
+                discovery = ServiceDiscovery(inputs_config['discovery'], self._message_callback, tailer=tailer)
+                self.services['service_discovery'] = discovery
             
             # Health server
             self.health_server = HealthServer(self.config, self.services)

@@ -8,6 +8,10 @@ A lightweight edge node data collector and shipper designed for Phase 1 AIOps de
 - **Syslog Server**: RFC3164 and RFC5424 compliant syslog listener (UDP port 5514, TCP port 5515)
 - **SNMP Polling**: Async SNMPv2c polling with OID name mapping
 - **Weather Context**: Periodic weather data from Open-Meteo API
+- **File Tailing**: Multi-file log tailing with rotation and glob pattern support
+- **Network Flows**: NetFlow v5/v9/IPFIX and sFlow telemetry collection via UDP
+- **NMEA Vessel Telemetry**: NMEA 0183 sentence parsing for vessel position, speed, and heading
+- **Service Discovery**: Automatic detection of listening services and log files
 - **File-based Import**: Tools to import CSV weather data and JSONL syslog events
 
 ### Data Shipping
@@ -139,6 +143,32 @@ inputs:
   weather:
     enabled: false
     city: "New York"  # or use latitude/longitude
+  
+  logs:
+    enabled: false
+    paths: []                         # Explicit file paths to tail
+    globs: ["/var/log/nginx/*.log"]   # Glob patterns for file discovery
+    from_beginning: false             # Start tailing from end of files
+    scan_interval: 2                  # Seconds between file scans
+  
+  flows:
+    enabled: false
+    netflow_ports: [2055]             # NetFlow v5/v9 UDP ports
+    ipfix_ports: [4739]               # IPFIX UDP ports 
+    sflow_ports: [6343]               # sFlow UDP ports
+  
+  nmea:
+    enabled: false
+    mode: udp                         # udp, tcp, or serial
+    bind_address: "0.0.0.0"
+    udp_port: 10110                   # Standard NMEA UDP port
+    tcp_port: 10110
+  
+  discovery:
+    enabled: false
+    interval: 300                     # Discovery interval in seconds
+    auto_tail_logs: true              # Auto-register found logs with file tailer
+    extra_logs: []                    # Additional log paths to check
 
 # Output Configuration
 output:
@@ -154,6 +184,174 @@ buffer:
   disk_buffer: false                 # Enable SQLite persistence
   disk_buffer_path: "/tmp/edgebot_buffer.db"
   disk_buffer_max_size: "100MB"
+```
+
+## Cruise-Ship Deployment
+
+EdgeBot includes specialized inputs for maritime vessel operations, including vessel telemetry, network flow analysis, and automatic service discovery.
+
+### NMEA Vessel Telemetry
+
+EdgeBot can consume NMEA 0183 data streams to provide vessel position, speed, course, and heading information:
+
+```yaml
+inputs:
+  nmea:
+    enabled: true
+    mode: udp                    # UDP listener (most common)
+    udp_port: 10110             # Standard NMEA port
+    bind_address: "0.0.0.0"
+```
+
+**Supported NMEA Sentences:**
+- **GPRMC**: GPS position, speed, course, and validity
+- **GPVTG**: Velocity made good (speed and course)
+- **GPHDT**: True heading
+
+**Sample NMEA Message:**
+```
+$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A
+```
+
+**Parsed Output:**
+```json
+{
+  "type": "nmea",
+  "sentence": "GPRMC", 
+  "lat": 48.1173,
+  "lon": 11.5167,
+  "sog_kn": 22.4,
+  "cog_deg": 84.4,
+  "valid": true
+}
+```
+
+### Network Flow Telemetry
+
+Collect network flow data from onboard networking equipment:
+
+```yaml
+inputs:
+  flows:
+    enabled: true
+    netflow_ports: [2055, 9995]     # NetFlow v5/v9 collectors
+    ipfix_ports: [4739]             # IPFIX collector  
+    sflow_ports: [6343]             # sFlow collector
+```
+
+**Phase 1 Implementation:**
+- Protocol version detection (NetFlow v5/v9/v10, IPFIX, sFlow)
+- Raw packet forwarding with metadata (source IP, size, version)
+- Base64 payload encoding for detailed analysis upstream
+- Configurable high ports (no root privileges required)
+
+### File Tailing and Log Collection
+
+Monitor log files from onboard services with automatic rotation handling:
+
+```yaml
+inputs:
+  logs:
+    enabled: true
+    paths: 
+      - "/var/log/nginx/access.log"
+      - "/var/log/dnsmasq.log"
+    globs:
+      - "/var/log/nginx/*.log"
+      - "/var/log/bind/*.log"
+    from_beginning: false           # Start from end (don't replay history)
+    scan_interval: 2                # Check for new files/rotations every 2s
+```
+
+**Features:**
+- **Rotation Detection**: Uses inode tracking to detect log rotation
+- **Service Labeling**: Automatically labels logs (web, dns, etc.) based on file paths
+- **Multi-file Support**: Tail multiple files simultaneously
+- **Glob Patterns**: Discover files dynamically using glob patterns
+
+### Service Discovery
+
+Automatically discover onboard services and register their log files:
+
+```yaml
+inputs:
+  discovery:
+    enabled: true
+    interval: 300                   # Run discovery every 5 minutes
+    auto_tail_logs: true            # Auto-add discovered logs to file tailer
+    extra_logs:                     # Additional paths to check
+      - "/opt/captive-portal/access.log"
+      - "/var/log/radius/radius.log"
+```
+
+**Discovery Methods:**
+- **Port Scanning**: Uses `ss -tulpn` to find listening services
+- **Common Log Locations**: Checks standard paths for nginx, DNS, HTTP servers
+- **Service Mapping**: Maps discovered services to their typical log files
+- **Auto-Registration**: Can automatically register found logs with the file tailer
+
+**Sample Discovery Output:**
+```json
+{
+  "type": "host_service_inventory",
+  "listeners": [
+    {"proto": "tcp", "local": "0.0.0.0:80", "proc": "users:((\"nginx\",pid=1234))"},
+    {"proto": "udp", "local": "0.0.0.0:53", "proc": "users:((\"dnsmasq\",pid=5678))"}
+  ],
+  "log_candidates": [
+    "/var/log/nginx/access.log",
+    "/var/log/dnsmasq.log"
+  ]
+}
+```
+
+### Maritime Integration Example
+
+Complete configuration for a cruise ship deployment:
+
+```yaml
+inputs:
+  # Core syslog collection
+  syslog:
+    enabled: true
+    udp_port: 5514
+    tcp_port: 5515
+
+  # Vessel position and navigation
+  nmea:
+    enabled: true
+    mode: udp
+    udp_port: 10110
+
+  # Network monitoring
+  flows:
+    enabled: true
+    netflow_ports: [2055]
+    sflow_ports: [6343]
+
+  # Log collection with service discovery
+  discovery:
+    enabled: true
+    interval: 300
+    auto_tail_logs: true
+    extra_logs:
+      - "/var/log/radius/radius.log"
+      - "/opt/captive-portal/*.log"
+
+  logs:
+    enabled: true
+    globs:
+      - "/var/log/nginx/*.log"
+      - "/var/log/bind/*.log" 
+      - "/var/log/dhcp/*.log"
+    scan_interval: 5
+
+  # Weather at current vessel position
+  weather:
+    enabled: true
+    latitude: 25.7617    # Updated periodically from NMEA
+    longitude: -80.1918
+    interval: 1800       # Every 30 minutes
 ```
 
 **Buffer Options:**
@@ -214,6 +412,89 @@ inputs:
     city: "San Francisco"
     interval: 3600
 ```
+
+### Testing File Tailing
+
+Enable file tailing to monitor log files:
+
+```yaml
+inputs:
+  logs:
+    enabled: true
+    paths: ["/var/log/nginx/access.log"]
+    from_beginning: true  # For testing, read from beginning
+```
+
+Generate test log entries:
+```bash
+# Create test log file
+echo "$(date) - Test log entry" >> /var/log/test.log
+
+# Tail with EdgeBot monitoring this file
+```
+
+### Testing Network Flow Collection
+
+Enable flow collection and test with sample data:
+
+```yaml
+inputs:
+  flows:
+    enabled: true
+    netflow_ports: [2055]
+    sflow_ports: [6343]
+```
+
+Send test flow data:
+```bash
+# Send test NetFlow packet to port 2055
+echo -e '\x00\x05\x00\x01\x12\x34\x56\x78' | nc -u localhost 2055
+
+# Send test sFlow packet to port 6343  
+echo -e '\x00\x00\x00\x05\x00\x00\x00\x01' | nc -u localhost 6343
+```
+
+### Testing NMEA Collection
+
+Enable NMEA collection:
+
+```yaml
+inputs:
+  nmea:
+    enabled: true
+    mode: udp
+    udp_port: 10110
+```
+
+Send test NMEA sentences:
+```bash
+# Test GPRMC sentence (position, speed, course)
+echo '$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A' | nc -u localhost 10110
+
+# Test GPVTG sentence (speed and course)  
+echo '$GPVTG,084.4,T,077.3,M,022.4,N,041.5,K*48' | nc -u localhost 10110
+
+# Test GPHDT sentence (true heading)
+echo '$GPHDT,084.4,T*23' | nc -u localhost 10110
+```
+
+### Testing Service Discovery
+
+Enable service discovery:
+
+```yaml
+inputs:
+  discovery:
+    enabled: true
+    interval: 60  # Run every minute for testing
+    auto_tail_logs: true
+```
+
+The discovery service will automatically:
+1. Scan for listening services using `ss -tulpn`
+2. Check common log file locations
+3. Register discovered logs with the file tailer
+4. Emit service inventory messages
 
 ## Data Import and Export Tools
 
