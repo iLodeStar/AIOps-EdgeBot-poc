@@ -8,10 +8,10 @@ This guide covers the complete observability stack for EdgeBot, including Promet
 
 ```bash
 # Start all services (Prometheus, Alertmanager, Grafana, Loki)
-docker-compose -f compose.observability.yml up -d
+docker compose -f compose.observability.yml up -d
 
 # Check that all services are healthy
-docker-compose -f compose.observability.yml ps
+docker compose -f compose.observability.yml ps
 ```
 
 ### 2. Access the Services
@@ -23,7 +23,23 @@ docker-compose -f compose.observability.yml ps
 | **Alertmanager** | http://localhost:9093 | None |
 | **Loki** | http://localhost:3100 | None |
 
-### 3. Start the Mothership
+### 3. Configure Email Alerts (Optional)
+
+To enable email notifications:
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your SMTP settings
+# Then restart Alertmanager
+docker compose -f compose.observability.yml restart alertmanager
+
+# Test email notifications
+./scripts/test_email_alerts.sh
+```
+
+### 4. Start the Mothership
 
 ```bash
 cd mothership
@@ -235,39 +251,118 @@ docker compose -f compose.observability.yml restart alertmanager
 
 #### Step 4: Test Email Delivery (Synthetic Test)
 
-To test email notifications work, you can temporarily trigger an alert:
+**Quick Test (Recommended)**
 
-1. **Lower the HighIngestLatency95th threshold** to trigger easily:
+Use the provided test script to verify email notifications:
+
+```bash
+# Run the automated test script
+./scripts/test_email_alerts.sh
+```
+
+This script will:
+- Check if the observability stack is running
+- Verify your email configuration
+- Create a temporary test alert that fires immediately
+- Wait for email delivery
+- Clean up automatically
+
+**Manual Test Methods**
+
+If you prefer manual testing, you can use one of these approaches:
+
+**Method 1: Trigger a High Latency Alert**
+
+1. **Start the observability stack**:
    ```bash
-   # Edit prometheus/alerts.yml temporarily
-   sed -i 's/> 1.0/> 0.001/' prometheus/alerts.yml
+   docker compose -f compose.observability.yml up -d
    ```
 
-2. **Restart Prometheus to reload rules**:
+2. **Create a test script** to generate synthetic latency metrics:
+   ```bash
+   # Create test script
+   cat > test_alert.sh << 'EOF'
+   #!/bin/bash
+   
+   echo "Starting synthetic alert test..."
+   
+   # Temporarily lower the HighIngestLatency95th threshold to 0.001s (1ms)
+   cp prometheus/alerts.yml prometheus/alerts.yml.backup
+   sed -i 's/> 1\.0/> 0.001/' prometheus/alerts.yml
+   
+   # Restart Prometheus to reload rules
+   docker compose -f compose.observability.yml restart prometheus
+   
+   echo "Waiting 30s for Prometheus to reload rules..."
+   sleep 30
+   
+   # Start mothership (which will have some initial latency)
+   cd mothership
+   python -m app.server &
+   MOTHERSHIP_PID=$!
+   
+   echo "Waiting 60s for alert to potentially fire..."
+   sleep 60
+   
+   # Check if alert is firing
+   echo "Checking alerts in Alertmanager:"
+   curl -s http://localhost:9093/api/v1/alerts | jq '.data[].labels.alertname' 2>/dev/null || echo "jq not available, check http://localhost:9093/#/alerts manually"
+   
+   # Cleanup
+   kill $MOTHERSHIP_PID 2>/dev/null
+   cd ..
+   mv prometheus/alerts.yml.backup prometheus/alerts.yml
+   docker compose -f compose.observability.yml restart prometheus
+   
+   echo "Test complete. Check your email and http://localhost:9093/#/alerts"
+   EOF
+   
+   chmod +x test_alert.sh
+   ./test_alert.sh
+   ```
+
+**Method 2: Create a Manual Test Alert**
+
+1. **Add a test alert rule**:
+   ```bash
+   # Add to prometheus/alerts.yml temporarily
+   cat >> prometheus/alerts.yml << 'EOF'
+   
+     # Test alert for email verification
+     - alert: EmailTestAlert
+       expr: vector(1)  # Always fires
+       for: 0m
+       labels:
+         severity: warning
+         component: test
+       annotations:
+         summary: "Test alert for email verification"
+         description: "This is a test alert to verify email notifications are working"
+   EOF
+   ```
+
+2. **Restart Prometheus**:
    ```bash
    docker compose -f compose.observability.yml restart prometheus
    ```
 
-3. **Start mothership to generate metrics**:
+3. **Wait for alert to fire** (should appear within 1 minute):
    ```bash
-   cd mothership
-   python -m app.server
+   # Check alerts
+   curl -s http://localhost:9093/api/v1/alerts | jq '.data[]'
    ```
 
-4. **Send some test data** to trigger latency metrics:
+4. **Clean up the test alert**:
    ```bash
-   curl -X POST http://localhost:8080/ingest -H "Content-Type: application/json" -d '{"test": "data"}'
-   ```
-
-5. **Check for alerts** in Alertmanager: http://localhost:9093/#/alerts
-
-6. **Wait for email** (should arrive within ~10 seconds if alert fires)
-
-7. **Restore the original threshold**:
-   ```bash
+   # Remove the test alert from prometheus/alerts.yml
    git checkout prometheus/alerts.yml
    docker compose -f compose.observability.yml restart prometheus
    ```
+
+**Verification Steps:**
+1. Check email inbox for alert notifications
+2. Visit http://localhost:9093/#/alerts to see active alerts
+3. Check Alertmanager logs: `docker compose -f compose.observability.yml logs alertmanager`
 
 #### Troubleshooting Email Notifications
 
