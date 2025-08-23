@@ -220,6 +220,20 @@ class ConfigManager:
         if os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'):
             self._config.setdefault('llm', {})['confidence_threshold'] = float(os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'))
         
+        # LLM Backend configuration
+        if os.getenv('LLM_BACKEND'):
+            self._config.setdefault('llm', {})['backend'] = os.getenv('LLM_BACKEND')
+        
+        # Ollama-specific configuration
+        if os.getenv('OLLAMA_BASE_URL'):
+            self._config.setdefault('llm', {})['ollama_base_url'] = os.getenv('OLLAMA_BASE_URL')
+        if os.getenv('OLLAMA_MODEL'):
+            self._config.setdefault('llm', {})['ollama_model'] = os.getenv('OLLAMA_MODEL')
+        if os.getenv('OLLAMA_TIMEOUT_MS'):
+            self._config.setdefault('llm', {})['ollama_timeout_ms'] = int(os.getenv('OLLAMA_TIMEOUT_MS'))
+        if os.getenv('OLLAMA_MAX_TOKENS'):
+            self._config.setdefault('llm', {})['ollama_max_tokens'] = int(os.getenv('OLLAMA_MAX_TOKENS'))
+        
         # Loki sink configuration - NEW
         if os.getenv('LOKI_ENABLED'):
             self._config.setdefault('sinks', {}).setdefault('loki', {})['enabled'] = os.getenv('LOKI_ENABLED').lower() in ('true', '1', 'yes', 'on')
@@ -367,11 +381,17 @@ class ConfigManager:
             },
             'llm': {
                 'enabled': False,
+                'backend': 'openai',  # 'openai' or 'ollama'
                 'endpoint': 'https://api.openai.com/v1',
                 'model': 'gpt-3.5-turbo',
                 'confidence_threshold': 0.8,
                 'max_tokens': 150,
-                'temperature': 0.0
+                'temperature': 0.0,
+                # Ollama-specific settings
+                'ollama_base_url': 'http://localhost:11434',
+                'ollama_model': 'llama3.1:8b-instruct-q4_0',
+                'ollama_timeout_ms': 30000,
+                'ollama_max_tokens': 150
             },
             'sinks': {
                 'timescaledb': {

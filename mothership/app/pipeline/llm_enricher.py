@@ -26,17 +26,23 @@ class LLMEnricher(Processor):
             logger.info("LLM enrichment is disabled")
             return
         
-        # LLM configuration
-        self.endpoint = config.get('endpoint', 'https://api.openai.com/v1')
-        self.api_key = config.get('api_key')
-        self.model = config.get('model', 'gpt-3.5-turbo')
-        self.max_tokens = config.get('max_tokens', 150)
-        self.temperature = config.get('temperature', 0.0)
+        # Backend selection
+        self.backend = config.get('backend', 'openai').lower()
+        if self.backend not in ['openai', 'ollama']:
+            raise ValueError(f"Invalid LLM backend: {self.backend}. Must be 'openai' or 'ollama'")
+        
+        # Common configuration
         self.confidence_threshold = config.get('confidence_threshold', 0.8)
         
         # Safety limits
         self.max_event_size = config.get('max_event_size', 10000)  # chars
         self.timeout_seconds = config.get('timeout', 30)
+        
+        # Backend-specific configuration
+        if self.backend == 'openai':
+            self._init_openai_config(config)
+        elif self.backend == 'ollama':
+            self._init_ollama_config(config)
         
         # Circuit breaker configuration
         self.circuit_breaker_enabled = config.get('circuit_breaker', {}).get('enabled', True)
@@ -51,7 +57,7 @@ class LLMEnricher(Processor):
         # HTTP client
         self.client = None
         
-        # JSON schema for LLM responses
+        # JSON schema for LLM responses (same for both backends)
         self.response_schema = {
             "type": "object",
             "properties": {
@@ -69,9 +75,29 @@ class LLMEnricher(Processor):
         }
         
         logger.info(f"Initialized LLM enricher", 
-                   endpoint=self.endpoint,
-                   model=self.model,
-                   confidence_threshold=self.confidence_threshold)
+                   backend=self.backend,
+                   confidence_threshold=self.confidence_threshold,
+                   model=getattr(self, 'model', 'unknown'))
+    
+    def _init_openai_config(self, config: Dict[str, Any]):
+        """Initialize OpenAI-specific configuration."""
+        self.endpoint = config.get('endpoint', 'https://api.openai.com/v1')
+        self.api_key = config.get('api_key')
+        self.model = config.get('model', 'gpt-3.5-turbo')
+        self.max_tokens = config.get('max_tokens', 150)
+        self.temperature = config.get('temperature', 0.0)
+    
+    def _init_ollama_config(self, config: Dict[str, Any]):
+        """Initialize Ollama-specific configuration."""
+        self.base_url = config.get('ollama_base_url', 'http://localhost:11434')
+        self.model = config.get('ollama_model', 'llama3.1:8b-instruct-q4_0')
+        self.max_tokens = config.get('ollama_max_tokens', 150)
+        self.temperature = config.get('temperature', 0.0)
+        
+        # Convert timeout from milliseconds if provided
+        timeout_ms = config.get('ollama_timeout_ms')
+        if timeout_ms:
+            self.timeout_seconds = timeout_ms / 1000
     
     def is_enabled(self) -> bool:
         """Override to check both config and circuit breaker state."""
@@ -139,6 +165,17 @@ class LLMEnricher(Processor):
         # Create safe prompt (no PII should be present at this point)
         prompt = self._create_safe_prompt(event)
         
+        # Route to backend-specific implementation
+        if self.backend == 'openai':
+            return await self._call_openai_llm(prompt)
+        elif self.backend == 'ollama':
+            return await self._call_ollama_llm(prompt)
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}")
+    
+    async def _call_openai_llm(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Call OpenAI-compatible LLM API."""
+        
         # Prepare request
         request_data = {
             "model": self.model,
@@ -186,13 +223,86 @@ class LLMEnricher(Processor):
             return None
             
         except httpx.TimeoutException:
-            logger.warning("LLM request timeout")
+            logger.warning("OpenAI LLM request timeout")
             raise
         except json.JSONDecodeError as e:
-            logger.warning("Invalid JSON response from LLM", error=str(e))
+            logger.warning("Invalid JSON response from OpenAI LLM", error=str(e))
             raise
         except Exception as e:
-            logger.error("LLM API call failed", error=str(e))
+            logger.error("OpenAI LLM API call failed", error=str(e))
+            raise
+    
+    async def _call_ollama_llm(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Call Ollama LLM API."""
+        
+        # Prepare system message and user prompt
+        system_message = (
+            "You are a log analysis assistant. Analyze the provided log event and "
+            "return structured enrichment data in JSON format. "
+            "Do not include any personally identifiable information in your response. "
+            "Provide only the requested fields with appropriate confidence scores."
+        )
+        
+        # Use chat endpoint for better conversation support
+        request_data = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_message
+                },
+                {
+                    "role": "user",  
+                    "content": prompt
+                }
+            ],
+            "stream": False,
+            "format": "json",  # Request JSON format response
+            "options": {
+                "num_predict": self.max_tokens,
+                "temperature": self.temperature
+            }
+        }
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/chat",
+                json=request_data,
+                headers=headers
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # Ollama chat response format
+            if 'message' in result and 'content' in result['message']:
+                content = result['message']['content']
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    # If content is not valid JSON, try to extract JSON from it
+                    import re
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group())
+                    else:
+                        logger.warning("No valid JSON found in Ollama response", content=content)
+                        return None
+            
+            return None
+            
+        except httpx.TimeoutException:
+            logger.warning("Ollama LLM request timeout")
+            raise
+        except json.JSONDecodeError as e:
+            logger.warning("Invalid JSON response from Ollama LLM", error=str(e))
+            raise
+        except Exception as e:
+            logger.error("Ollama LLM API call failed", error=str(e))
             raise
     
     def _create_safe_prompt(self, event: Dict[str, Any]) -> str:
@@ -339,6 +449,7 @@ Example response:
         stats = super().get_stats()
         stats.update({
             'enabled': self.enabled,
+            'backend': getattr(self, 'backend', 'unknown'),
             'circuit_open': self.circuit_open,
             'failure_count': self.failure_count,
             'confidence_threshold': self.confidence_threshold
