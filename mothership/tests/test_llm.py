@@ -317,5 +317,186 @@ class TestLLMEnricher(unittest.TestCase):
         self.assertEqual(stats['confidence_threshold'], 0.8)
 
 
+class TestOllamaLLMEnricher(unittest.TestCase):
+    """Test Ollama LLM enricher with mocked HTTP calls."""
+    
+    @patch('httpx.AsyncClient.post')
+    async def test_ollama_successful_enrichment(self, mock_post):
+        """Test successful Ollama LLM enrichment."""
+        # Mock Ollama response
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'message': {
+                'content': json.dumps({
+                    'confidence': 0.85,
+                    'tags': {'component': 'web', 'action': 'request'},
+                    'category': 'web_access',
+                    'priority': 'low',
+                    'summary': 'Web request processed'
+                })
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        config = {
+            'enabled': True,
+            'backend': 'ollama',
+            'ollama_base_url': 'http://localhost:11434',
+            'ollama_model': 'llama3.1:8b-instruct-q4_0',
+            'confidence_threshold': 0.8
+        }
+        enricher = LLMEnricher(config)
+        
+        event = {'message': 'GET /api/users HTTP/1.1', 'type': 'access_log'}
+        result = await enricher.process(event)
+        
+        # Should be enriched
+        self.assertIn('llm_enrichment', result)
+        self.assertEqual(result['llm_enrichment']['confidence'], 0.85)
+        self.assertEqual(result['tags']['llm_component'], 'web')
+        self.assertEqual(result['llm_category'], 'web_access')
+        
+        # Verify HTTP call was made to Ollama
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        self.assertIn('/api/chat', call_args[0][0])
+        
+        # Check request structure
+        request_data = call_args[1]['json']
+        self.assertEqual(request_data['model'], 'llama3.1:8b-instruct-q4_0')
+        self.assertFalse(request_data['stream'])
+        self.assertEqual(request_data['format'], 'json')
+        self.assertIn('messages', request_data)
+        self.assertEqual(len(request_data['messages']), 2)  # system + user
+    
+    @patch('httpx.AsyncClient.post')
+    async def test_ollama_low_confidence_rejection(self, mock_post):
+        """Test rejection of low confidence Ollama responses."""
+        # Mock Ollama response with low confidence
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'message': {
+                'content': json.dumps({
+                    'confidence': 0.6,  # Below threshold
+                    'tags': {'component': 'unknown'},
+                    'category': 'unknown'
+                })
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        config = {
+            'enabled': True,
+            'backend': 'ollama',
+            'confidence_threshold': 0.8
+        }
+        enricher = LLMEnricher(config)
+        
+        event = {'message': 'Unclear log message', 'type': 'log'}
+        result = await enricher.process(event)
+        
+        # Should not be enriched due to low confidence
+        self.assertNotIn('llm_enrichment', result)
+        self.assertNotIn('llm_category', result)
+    
+    @patch('httpx.AsyncClient.post')
+    async def test_ollama_malformed_json_extraction(self, mock_post):
+        """Test extraction of JSON from malformed Ollama responses."""
+        # Mock Ollama response with text around JSON
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'message': {
+                'content': 'Here is the analysis: {"confidence": 0.9, "category": "system_event", "tags": {"type": "startup"}} Hope this helps!'
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        config = {
+            'enabled': True,
+            'backend': 'ollama',
+            'confidence_threshold': 0.8
+        }
+        enricher = LLMEnricher(config)
+        
+        event = {'message': 'System starting up', 'type': 'log'}
+        result = await enricher.process(event)
+        
+        # Should be enriched despite malformed response
+        self.assertIn('llm_enrichment', result)
+        self.assertEqual(result['llm_enrichment']['confidence'], 0.9)
+        self.assertEqual(result['llm_category'], 'system_event')
+    
+    @patch('httpx.AsyncClient.post')
+    async def test_ollama_invalid_json_handling(self, mock_post):
+        """Test handling of completely invalid JSON from Ollama."""
+        # Mock Ollama response with no valid JSON
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            'message': {
+                'content': 'This is just plain text with no JSON structure.'
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        config = {
+            'enabled': True,
+            'backend': 'ollama'
+        }
+        enricher = LLMEnricher(config)
+        
+        event = {'message': 'Test event', 'type': 'log'}
+        result = await enricher.process(event)
+        
+        # Should return original event due to invalid response
+        self.assertEqual(result, event)
+    
+    def test_ollama_backend_configuration(self):
+        """Test Ollama backend configuration options."""
+        config = {
+            'enabled': True,
+            'backend': 'ollama',
+            'ollama_base_url': 'http://custom-ollama:11434',
+            'ollama_model': 'custom-model:latest',
+            'ollama_timeout_ms': 45000,
+            'ollama_max_tokens': 200
+        }
+        enricher = LLMEnricher(config)
+        
+        self.assertEqual(enricher.backend, 'ollama')
+        self.assertEqual(enricher.base_url, 'http://custom-ollama:11434')
+        self.assertEqual(enricher.model, 'custom-model:latest')
+        self.assertEqual(enricher.max_tokens, 200)
+        self.assertEqual(enricher.timeout_seconds, 45.0)  # Converted from ms
+    
+    def test_invalid_backend_rejection(self):
+        """Test rejection of invalid backend configuration."""
+        config = {
+            'enabled': True,
+            'backend': 'invalid_backend'
+        }
+        
+        with self.assertRaises(ValueError) as context:
+            LLMEnricher(config)
+        
+        self.assertIn("Invalid LLM backend", str(context.exception))
+    
+    def test_backend_stats(self):
+        """Test backend information in stats."""
+        config = {
+            'enabled': True,
+            'backend': 'ollama'
+        }
+        enricher = LLMEnricher(config)
+        
+        stats = enricher.get_stats()
+        self.assertEqual(stats['backend'], 'ollama')
+        self.assertIn('enabled', stats)
+        self.assertIn('confidence_threshold', stats)
+
+
 if __name__ == '__main__':
     unittest.main()

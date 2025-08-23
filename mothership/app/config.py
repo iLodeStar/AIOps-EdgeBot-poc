@@ -220,6 +220,20 @@ class ConfigManager:
         if os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'):
             self._config.setdefault('llm', {})['confidence_threshold'] = float(os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'))
         
+        # LLM Backend configuration
+        if os.getenv('LLM_BACKEND'):
+            self._config.setdefault('llm', {})['backend'] = os.getenv('LLM_BACKEND')
+        
+        # Ollama-specific configuration
+        if os.getenv('OLLAMA_BASE_URL'):
+            self._config.setdefault('llm', {})['ollama_base_url'] = os.getenv('OLLAMA_BASE_URL')
+        if os.getenv('OLLAMA_MODEL'):
+            self._config.setdefault('llm', {})['ollama_model'] = os.getenv('OLLAMA_MODEL')
+        if os.getenv('OLLAMA_TIMEOUT_MS'):
+            self._config.setdefault('llm', {})['ollama_timeout_ms'] = int(os.getenv('OLLAMA_TIMEOUT_MS'))
+        if os.getenv('OLLAMA_MAX_TOKENS'):
+            self._config.setdefault('llm', {})['ollama_max_tokens'] = int(os.getenv('OLLAMA_MAX_TOKENS'))
+        
         # Loki sink configuration - NEW
         if os.getenv('LOKI_ENABLED'):
             self._config.setdefault('sinks', {}).setdefault('loki', {})['enabled'] = os.getenv('LOKI_ENABLED').lower() in ('true', '1', 'yes', 'on')
@@ -235,10 +249,66 @@ class ConfigManager:
             self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_size'] = int(os.getenv('LOKI_BATCH_SIZE'))
         if os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'):
             self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_timeout_seconds'] = float(os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'))
+
+        # Loki reliability configuration
+        if os.getenv('LOKI_MAX_RETRIES'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['max_retries'] = int(os.getenv('LOKI_MAX_RETRIES'))
+        if os.getenv('LOKI_INITIAL_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['initial_backoff_ms'] = int(os.getenv('LOKI_INITIAL_BACKOFF_MS'))
+        if os.getenv('LOKI_MAX_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['max_backoff_ms'] = int(os.getenv('LOKI_MAX_BACKOFF_MS'))
+        if os.getenv('LOKI_JITTER_FACTOR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['jitter_factor'] = float(os.getenv('LOKI_JITTER_FACTOR'))
+        if os.getenv('LOKI_TIMEOUT_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['timeout_ms'] = int(os.getenv('LOKI_TIMEOUT_MS'))
+        if os.getenv('LOKI_FAILURE_THRESHOLD'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['failure_threshold'] = int(os.getenv('LOKI_FAILURE_THRESHOLD'))
+        if os.getenv('LOKI_OPEN_DURATION_SEC'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['open_duration_sec'] = int(os.getenv('LOKI_OPEN_DURATION_SEC'))
+        if os.getenv('LOKI_HALF_OPEN_MAX_INFLIGHT'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['half_open_max_inflight'] = int(os.getenv('LOKI_HALF_OPEN_MAX_INFLIGHT'))
+        if os.getenv('LOKI_QUEUE_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['enabled'] = os.getenv('LOKI_QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('LOKI_QUEUE_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_dir'] = os.getenv('LOKI_QUEUE_DIR')
+        if os.getenv('LOKI_QUEUE_MAX_BYTES'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_max_bytes'] = int(os.getenv('LOKI_QUEUE_MAX_BYTES'))
+        if os.getenv('LOKI_QUEUE_FLUSH_INTERVAL_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_flush_interval_ms'] = int(os.getenv('LOKI_QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('LOKI_DLQ_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['dlq_dir'] = os.getenv('LOKI_DLQ_DIR')
         
         # TimescaleDB sink configuration - NEW
         if os.getenv('TSDB_ENABLED'):
             self._config.setdefault('sinks', {}).setdefault('timescaledb', {})['enabled'] = os.getenv('TSDB_ENABLED').lower() in ('true', '1', 'yes', 'on')
+
+        # TSDB reliability configuration
+        if os.getenv('TSDB_MAX_RETRIES'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['max_retries'] = int(os.getenv('TSDB_MAX_RETRIES'))
+        if os.getenv('TSDB_INITIAL_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['initial_backoff_ms'] = int(os.getenv('TSDB_INITIAL_BACKOFF_MS'))
+        if os.getenv('TSDB_MAX_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['max_backoff_ms'] = int(os.getenv('TSDB_MAX_BACKOFF_MS'))
+        if os.getenv('TSDB_JITTER_FACTOR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['jitter_factor'] = float(os.getenv('TSDB_JITTER_FACTOR'))
+        if os.getenv('TSDB_TIMEOUT_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['timeout_ms'] = int(os.getenv('TSDB_TIMEOUT_MS'))
+        if os.getenv('TSDB_FAILURE_THRESHOLD'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['failure_threshold'] = int(os.getenv('TSDB_FAILURE_THRESHOLD'))
+        if os.getenv('TSDB_OPEN_DURATION_SEC'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['open_duration_sec'] = int(os.getenv('TSDB_OPEN_DURATION_SEC'))
+        if os.getenv('TSDB_HALF_OPEN_MAX_INFLIGHT'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['half_open_max_inflight'] = int(os.getenv('TSDB_HALF_OPEN_MAX_INFLIGHT'))
+        if os.getenv('TSDB_QUEUE_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['enabled'] = os.getenv('TSDB_QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('TSDB_QUEUE_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_dir'] = os.getenv('TSDB_QUEUE_DIR')
+        if os.getenv('TSDB_QUEUE_MAX_BYTES'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_max_bytes'] = int(os.getenv('TSDB_QUEUE_MAX_BYTES'))
+        if os.getenv('TSDB_QUEUE_FLUSH_INTERVAL_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_flush_interval_ms'] = int(os.getenv('TSDB_QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('TSDB_DLQ_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['dlq_dir'] = os.getenv('TSDB_DLQ_DIR')
         
         # Logging
         if os.getenv('MOTHERSHIP_LOG_LEVEL'):
@@ -311,11 +381,17 @@ class ConfigManager:
             },
             'llm': {
                 'enabled': False,
+                'backend': 'openai',  # 'openai' or 'ollama'
                 'endpoint': 'https://api.openai.com/v1',
                 'model': 'gpt-3.5-turbo',
                 'confidence_threshold': 0.8,
                 'max_tokens': 150,
-                'temperature': 0.0
+                'temperature': 0.0,
+                # Ollama-specific settings
+                'ollama_base_url': 'http://localhost:11434',
+                'ollama_model': 'llama3.1:8b-instruct-q4_0',
+                'ollama_timeout_ms': 30000,
+                'ollama_max_tokens': 150
             },
             'sinks': {
                 'timescaledb': {
