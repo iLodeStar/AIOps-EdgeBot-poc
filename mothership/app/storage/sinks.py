@@ -1,34 +1,16 @@
 """Storage sinks manager for dual writes to TimescaleDB and Loki."""
 
 import asyncio
-from typing import Dict, Any, List, Optional, Protocol
+from typing import Dict, Any, List, Optional
 from abc import ABC, abstractmethod
 import structlog
 
+from .protocols import StorageSink
 from .loki import LokiClient
+from .resilient_sink import ResilientSink
 from ..metrics import mship_sink_write_seconds
 
 logger = structlog.get_logger(__name__)
-
-
-class StorageSink(Protocol):
-    """Protocol for storage sinks."""
-    
-    async def start(self) -> None:
-        """Start the sink."""
-        ...
-    
-    async def stop(self) -> None:
-        """Stop the sink."""
-        ...
-    
-    async def write_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Write events and return stats."""
-        ...
-    
-    def is_healthy(self) -> bool:
-        """Check if sink is healthy."""
-        ...
 
 
 class TSDBSink:
@@ -116,20 +98,28 @@ class LokiSink:
 
 
 class SinksManager:
-    """Manages writes to multiple storage sinks."""
+    """Manages writes to multiple storage sinks with reliability features."""
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.sinks: Dict[str, StorageSink] = {}
+        self.sinks: Dict[str, ResilientSink] = {}
         
         # Initialize sinks based on configuration
         sinks_config = config.get('sinks', {})
         
         if sinks_config.get('timescaledb', {}).get('enabled', True):
-            self.sinks["tsdb"] = TSDBSink(sinks_config.get('timescaledb', {}))
+            tsdb_config = sinks_config.get('timescaledb', {})
+            tsdb_sink = TSDBSink(tsdb_config)
+            
+            # Wrap with resilience features
+            self.sinks["tsdb"] = ResilientSink("tsdb", tsdb_sink, tsdb_config)
             
         if sinks_config.get('loki', {}).get('enabled', False):
-            self.sinks["loki"] = LokiSink(sinks_config.get('loki', {}))
+            loki_config = sinks_config.get('loki', {})
+            loki_sink = LokiSink(loki_config)
+            
+            # Wrap with resilience features  
+            self.sinks["loki"] = ResilientSink("loki", loki_sink, loki_config)
     
     async def start(self):
         """Start all enabled sinks."""
@@ -175,21 +165,25 @@ class SinksManager:
                 results[name] = await task
             except Exception as e:
                 logger.error("Sink write failed", sink=name, error=str(e))
-                results[name] = {"written": 0, "errors": len(events)}
+                results[name] = {"written": 0, "errors": len(events), "retries": 0, "queued": 0}
         
-        # Log summary
+        # Log summary with enhanced stats
         total_written = sum(result.get("written", 0) for result in results.values())
         total_errors = sum(result.get("errors", 0) for result in results.values())
+        total_retries = sum(result.get("retries", 0) for result in results.values())
+        total_queued = sum(result.get("queued", 0) for result in results.values())
         
         logger.info("Multi-sink write completed",
                    events=len(events),
                    total_written=total_written,
                    total_errors=total_errors,
+                   total_retries=total_retries,
+                   total_queued=total_queued,
                    sink_results=results)
         
         return results
     
-    async def _safe_write(self, name: str, sink: StorageSink, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def _safe_write(self, name: str, sink: ResilientSink, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Safely write to a sink with error handling and metrics observation."""
         try:
             # Observe per-sink write latency as required
@@ -197,7 +191,7 @@ class SinksManager:
                 return await sink.write_events(events)
         except Exception as e:
             logger.error("Sink write exception", sink=name, error=str(e))
-            return {"written": 0, "errors": len(events)}
+            return {"written": 0, "errors": len(events), "retries": 0, "queued": 0}
     
     def get_health_status(self) -> Dict[str, Any]:
         """Get health status of all sinks."""
@@ -208,7 +202,8 @@ class SinksManager:
             is_healthy = sink.is_healthy()
             sink_health[name] = {
                 "healthy": is_healthy,
-                "enabled": True
+                "enabled": True,
+                "stats": sink.get_stats()
             }
             if not is_healthy:
                 overall_healthy = False
@@ -230,6 +225,6 @@ class SinksManager:
         """Get names of all configured sinks."""
         return list(self.sinks.keys())
     
-    def get_sink(self, name: str) -> Optional[StorageSink]:
+    def get_sink(self, name: str) -> Optional[ResilientSink]:
         """Get a specific sink by name."""
         return self.sinks.get(name)

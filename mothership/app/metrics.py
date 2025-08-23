@@ -77,6 +77,65 @@ mship_loki_queue_size = Gauge(
     registry=METRICS_REGISTRY
 )
 
+# Per-sink retry metrics
+mship_sink_retry_total = Counter(
+    'mship_sink_retry_total',
+    'Total number of retry attempts per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_error_total = Counter(
+    'mship_sink_error_total',
+    'Total number of errors per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_timeout_total = Counter(
+    'mship_sink_timeout_total',
+    'Total number of timeouts per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+# Per-sink circuit breaker metrics  
+mship_sink_circuit_state = Gauge(
+    'mship_sink_circuit_state',
+    'Circuit breaker state per sink (0=closed, 1=open, 2=half-open)',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_circuit_open_total = Counter(
+    'mship_sink_circuit_open_total',
+    'Total number of times circuit breaker opened per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+# Store-and-forward queue metrics
+mship_sink_queue_size = Gauge(
+    'mship_sink_queue_size',
+    'Current number of events in persistent queue per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_queue_bytes = Gauge(
+    'mship_sink_queue_bytes',
+    'Current size of persistent queue in bytes per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_dlq_total = Counter(
+    'mship_sink_dlq_total',
+    'Total number of events sent to dead letter queue per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
 
 def get_metrics_content() -> str:
     """Generate Prometheus metrics content from custom registry."""
