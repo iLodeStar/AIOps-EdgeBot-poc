@@ -124,25 +124,25 @@ docs-validate:
 # E2E Infrastructure management
 e2e-up:
 	@echo "Starting E2E testing infrastructure..."
-	docker-compose -f docker-compose.e2e.yml up -d loki
+	docker compose -f docker-compose.e2e.yml up -d loki
 	@echo "Waiting for services to be ready..."
 	@sleep 10
 	@echo "E2E infrastructure ready!"
 
 e2e-up-full:
 	@echo "Starting full E2E testing stack..."
-	docker-compose -f docker-compose.e2e.yml --profile edgebot --profile mothership up -d
+	docker compose -f docker-compose.e2e.yml --profile edgebot --profile mothership up -d
 	@echo "Waiting for all services to be ready..."
 	@sleep 20
 	@echo "Full E2E stack ready!"
 
 e2e-down:
 	@echo "Stopping E2E testing infrastructure..."
-	docker-compose -f docker-compose.e2e.yml down -v
+	docker compose -f docker-compose.e2e.yml down -v
 
 e2e-logs:
 	@echo "E2E Service logs:"
-	docker-compose -f docker-compose.e2e.yml logs --tail=50
+	docker compose -f docker-compose.e2e.yml logs --tail=50
 
 # Cleanup targets
 clean: clean-reports clean-temp clean-docker
@@ -164,7 +164,7 @@ clean-temp:
 
 clean-docker:
 	@echo "Cleaning Docker E2E resources..."
-	docker-compose -f docker-compose.e2e.yml down -v --remove-orphans
+	docker compose -f docker-compose.e2e.yml down -v --remove-orphans
 	docker system prune -f --volumes
 
 # Development helpers

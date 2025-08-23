@@ -81,7 +81,7 @@ run_e2e_tests() {
     
     # Start E2E infrastructure
     log_info "Starting E2E testing infrastructure..."
-    docker-compose -f docker-compose.e2e.yml up -d loki
+    docker compose -f docker-compose.e2e.yml up -d loki
     
     # Wait for Loki to be ready
     log_info "Waiting for Loki to be ready..."
@@ -105,7 +105,7 @@ run_e2e_tests() {
     
     # Stop E2E infrastructure
     log_info "Stopping E2E testing infrastructure..."
-    docker-compose -f docker-compose.e2e.yml down -v
+    docker compose -f docker-compose.e2e.yml down -v
     
     log_success "E2E tests completed"
 }
