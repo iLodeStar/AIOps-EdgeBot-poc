@@ -306,6 +306,7 @@ class IdempotencyManager:
         }
 
 
+class RateLimiter:
     """Token bucket rate limiter."""
     
     def __init__(self, rate: float, burst: int):

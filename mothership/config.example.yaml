@@ -160,3 +160,39 @@ llm:
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
   structured: true
+
+# Storage sinks configuration
+sinks:
+  # TimescaleDB (Primary sink - enabled by default)
+  timescaledb:
+    enabled: true
+  
+  # Loki (Secondary sink - disabled by default)
+  loki:
+    enabled: false
+    url: "http://localhost:3100"
+    tenant_id: null
+    username: null
+    password: null
+    batch_size: 100
+    batch_timeout_seconds: 5.0
+
+# ======= SATCOM/At-Sea Reliability Enhancements =======
+
+# Per-sink reliability defaults (SATCOM-friendly)
+sink_defaults:
+  # Retry configuration optimized for satellite connections
+  max_retries: 5
+  initial_backoff_ms: 500
+  max_backoff_ms: 30000  # 30 seconds max backoff
+  jitter_factor: 0.2     # 20% jitter to prevent thundering herd
+  timeout_ms: 5000       # 5 second request timeout
+  
+  # Circuit breaker configuration
+  failure_threshold: 5        # Trip after 5 consecutive failures
+  open_duration_sec: 60       # Stay open for 60 seconds
+  half_open_max_inflight: 1   # Only 1 test request in half-open state
+
+# Idempotency prevents duplicate processing on retry
+idempotency:
+  window_sec: 3600  # 1 hour deduplication window
