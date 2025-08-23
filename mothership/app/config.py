@@ -145,6 +145,9 @@ class ConfigManager:
         # Set up signal handler for hot reload
         signal.signal(signal.SIGHUP, self._handle_sighup)
         
+        # Load config on initialization
+        self.load_config()
+        
     def _handle_sighup(self, signum, frame):
         """Handle SIGHUP for configuration hot-reload."""
         logger.info("Received SIGHUP, reloading configuration")
@@ -240,6 +243,45 @@ class ConfigManager:
         if os.getenv('TSDB_ENABLED'):
             self._config.setdefault('sinks', {}).setdefault('timescaledb', {})['enabled'] = os.getenv('TSDB_ENABLED').lower() in ('true', '1', 'yes', 'on')
         
+        # Reliability configuration - NEW
+        reliability_config = self._config.setdefault('reliability', {})
+        
+        # Retry configuration
+        if os.getenv('SINK_DEFAULT_MAX_RETRIES'):
+            reliability_config['max_retries'] = int(os.getenv('SINK_DEFAULT_MAX_RETRIES'))
+        if os.getenv('SINK_DEFAULT_INITIAL_BACKOFF_MS'):
+            reliability_config['initial_backoff_ms'] = int(os.getenv('SINK_DEFAULT_INITIAL_BACKOFF_MS'))
+        if os.getenv('SINK_DEFAULT_MAX_BACKOFF_MS'):
+            reliability_config['max_backoff_ms'] = int(os.getenv('SINK_DEFAULT_MAX_BACKOFF_MS'))
+        if os.getenv('SINK_DEFAULT_JITTER_FACTOR'):
+            reliability_config['jitter_factor'] = float(os.getenv('SINK_DEFAULT_JITTER_FACTOR'))
+        if os.getenv('SINK_DEFAULT_TIMEOUT_MS'):
+            reliability_config['timeout_ms'] = int(os.getenv('SINK_DEFAULT_TIMEOUT_MS'))
+            
+        # Circuit breaker configuration
+        if os.getenv('SINK_DEFAULT_FAILURE_THRESHOLD'):
+            reliability_config['failure_threshold'] = int(os.getenv('SINK_DEFAULT_FAILURE_THRESHOLD'))
+        if os.getenv('SINK_DEFAULT_OPEN_DURATION_SEC'):
+            reliability_config['open_duration_sec'] = int(os.getenv('SINK_DEFAULT_OPEN_DURATION_SEC'))
+        if os.getenv('SINK_DEFAULT_HALF_OPEN_MAX_INFLIGHT'):
+            reliability_config['half_open_max_inflight'] = int(os.getenv('SINK_DEFAULT_HALF_OPEN_MAX_INFLIGHT'))
+            
+        # Persistent queue configuration
+        if os.getenv('QUEUE_ENABLED'):
+            reliability_config['queue_enabled'] = os.getenv('QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('QUEUE_DIR'):
+            reliability_config['queue_dir'] = os.getenv('QUEUE_DIR')
+        if os.getenv('QUEUE_MAX_BYTES'):
+            reliability_config['queue_max_bytes'] = int(os.getenv('QUEUE_MAX_BYTES'))
+        if os.getenv('QUEUE_FLUSH_INTERVAL_MS'):
+            reliability_config['queue_flush_interval_ms'] = int(os.getenv('QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('DLQ_DIR'):
+            reliability_config['dlq_dir'] = os.getenv('DLQ_DIR')
+        if os.getenv('FLUSH_BANDWIDTH_BYTES_PER_SEC'):
+            reliability_config['flush_bandwidth_bytes_per_sec'] = int(os.getenv('FLUSH_BANDWIDTH_BYTES_PER_SEC'))
+        if os.getenv('IDEMPOTENCY_WINDOW_SEC'):
+            reliability_config['idempotency_window_sec'] = int(os.getenv('IDEMPOTENCY_WINDOW_SEC'))
+        
         # Logging
         if os.getenv('MOTHERSHIP_LOG_LEVEL'):
             self._config.setdefault('logging', {})['level'] = os.getenv('MOTHERSHIP_LOG_LEVEL')
@@ -333,6 +375,24 @@ class ConfigManager:
                     'retry_backoff_seconds': 1.0,
                     'timeout_seconds': 30.0
                 }
+            },
+            'reliability': {
+                # Safe defaults suitable for immediate use
+                'max_retries': 5,
+                'initial_backoff_ms': 500,
+                'max_backoff_ms': 30000,
+                'jitter_factor': 0.2,
+                'timeout_ms': 5000,
+                'failure_threshold': 5,
+                'open_duration_sec': 60,
+                'half_open_max_inflight': 3,
+                'queue_enabled': True,
+                'queue_dir': './data/queue',
+                'queue_max_bytes': 1073741824,  # 1 GiB
+                'queue_flush_interval_ms': 2000,
+                'dlq_dir': './data/dlq',
+                'flush_bandwidth_bytes_per_sec': 1048576,  # 1 MiB/s
+                'idempotency_window_sec': 86400  # 24 hours
             },
             'logging': {
                 'level': 'INFO',

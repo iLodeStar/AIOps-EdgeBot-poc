@@ -77,6 +77,54 @@ mship_loki_queue_size = Gauge(
     registry=METRICS_REGISTRY
 )
 
+# Reliability metrics for per-sink retries, circuit breakers, and persistent queue
+mship_sink_retry_total = Counter(
+    'mship_sink_retry_total',
+    'Total number of retries per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_error_total = Counter(
+    'mship_sink_error_total',
+    'Total number of errors per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_timeout_total = Counter(
+    'mship_sink_timeout_total',
+    'Total number of timeouts per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_circuit_state = Gauge(
+    'mship_sink_circuit_state',
+    'Circuit breaker state per sink (0=closed, 1=open, 2=half-open)',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_sink_circuit_open_total = Counter(
+    'mship_sink_circuit_open_total',
+    'Total number of times circuit breaker opened per sink',
+    ['sink'],
+    registry=METRICS_REGISTRY
+)
+
+mship_queue_depth = Gauge(
+    'mship_queue_depth',
+    'Current depth of persistent queue',
+    registry=METRICS_REGISTRY
+)
+
+mship_queue_bytes = Gauge(
+    'mship_queue_bytes',
+    'Current size of persistent queue in bytes',
+    registry=METRICS_REGISTRY
+)
+
 
 def get_metrics_content() -> str:
     """Generate Prometheus metrics content from custom registry."""
