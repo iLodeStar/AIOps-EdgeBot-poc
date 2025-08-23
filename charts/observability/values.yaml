@@ -23,8 +23,12 @@ loki:
   standalone: false
   # Use test schema for CI and quick testing
   useTestSchema: true
+  # Deploy as single binary (not distributed)
+  deploymentMode: SingleBinary
   # Configuration for Loki
   loki:
+    # Enable test schema for quick testing without persistence  
+    useTestSchema: true
     # For production, uncomment and configure proper schema
     # schemaConfig:
     #   configs:
@@ -35,17 +39,26 @@ loki:
     #       index:
     #         prefix: index_
     #         period: 24h
-    # Storage configuration for test schema
+    # Storage configuration for test schema - simple filesystem
     storage:
       type: filesystem
-    compactor:
-      working_directory: /loki/compactor
-      shared_store: filesystem
     # Resource limits
     limits_config:
       enforce_metric_name: false
       reject_old_samples: true
       reject_old_samples_max_age: 168h
+  # Explicitly disable distributed components to avoid object storage requirement
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  # Enable single binary mode
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: false  # Disable persistence for testing
 
 # Grafana configuration
 grafana:
