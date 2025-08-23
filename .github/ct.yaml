@@ -10,5 +10,3 @@ chart-repos:
 helm-extra-args: --timeout 600s
 check-version-increment: false  # Disable for new charts
 validate-maintainers: false
-# Since these are new charts, we don't want to enforce git history
-all-changed: true

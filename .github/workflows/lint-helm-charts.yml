@@ -32,12 +32,35 @@ jobs:
       - name: Set up chart-testing
         uses: helm/chart-testing-action@v2.6.1
 
-      - name: Add Helm repositories
+      - name: Check network connectivity and add Helm repositories
+        id: helm-repos
         run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo add timescale https://charts.timescale.com/
-          helm repo update
+          # Test connectivity to required repositories
+          network_ok=true
+          if ! curl -s --connect-timeout 10 https://prometheus-community.github.io/helm-charts/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach prometheus-community.github.io"
+            network_ok=false
+          fi
+          if ! curl -s --connect-timeout 10 https://grafana.github.io/helm-charts/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach grafana.github.io"
+            network_ok=false
+          fi
+          if ! curl -s --connect-timeout 10 https://charts.timescale.com/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach charts.timescale.com"
+            network_ok=false
+          fi
+          
+          if [[ "$network_ok" == "true" ]]; then
+            echo "Network connectivity OK, adding repositories..."
+            helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+            helm repo add grafana https://grafana.github.io/helm-charts
+            helm repo add timescale https://charts.timescale.com/
+            helm repo update
+            echo "repos-available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Network connectivity issues detected, skipping chart-testing..."
+            echo "repos-available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run chart-testing (list-changed)
         id: list-changed
@@ -48,7 +71,7 @@ jobs:
           fi
 
       - name: Update chart dependencies
-        if: steps.list-changed.outputs.changed == 'true'
+        if: steps.list-changed.outputs.changed == 'true' && steps.helm-repos.outputs.repos-available == 'true'
         run: |
           for chart in charts/*/; do
             if [[ -f "$chart/Chart.yaml" ]] && [[ -f "$chart/requirements.yaml" || $(grep -q "dependencies:" "$chart/Chart.yaml") ]]; then
@@ -58,25 +81,28 @@ jobs:
           done
 
       - name: Run chart-testing (lint)
-        if: steps.list-changed.outputs.changed == 'true'
+        if: steps.list-changed.outputs.changed == 'true' && steps.helm-repos.outputs.repos-available == 'true'
         run: |
-          if ! ct lint --target-branch ${{ github.event.repository.default_branch }} --config .github/ct.yaml; then
-            echo "Chart-testing failed, falling back to basic helm lint..."
-            failed=false
-            for chart in charts/*/; do
-              if [[ -f "$chart/Chart.yaml" ]]; then
-                echo "Linting $chart with helm lint..."
-                if ! helm lint "$chart"; then
-                  echo "ERROR: helm lint failed for $chart"
-                  failed=true
-                fi
+          ct lint --target-branch ${{ github.event.repository.default_branch }} --config .github/ct.yaml
+
+      - name: Run basic helm lint (fallback when repos unavailable)
+        if: steps.list-changed.outputs.changed == 'true' && steps.helm-repos.outputs.repos-available == 'false'
+        run: |
+          echo "Running basic helm lint due to network connectivity issues..."
+          failed=false
+          for chart in charts/*/; do
+            if [[ -f "$chart/Chart.yaml" ]]; then
+              echo "Linting $chart with helm lint..."
+              if ! helm lint "$chart"; then
+                echo "ERROR: helm lint failed for $chart"
+                failed=true
               fi
-            done
-            if [[ "$failed" == "true" ]]; then
-              exit 1
             fi
-            echo "Basic helm linting completed successfully"
+          done
+          if [[ "$failed" == "true" ]]; then
+            exit 1
           fi
+          echo "Basic helm linting completed successfully"
 
       - name: Install kubeconform
         if: steps.list-changed.outputs.changed == 'true'
@@ -90,13 +116,16 @@ jobs:
           for chart in charts/*/; do
             if [[ -f "$chart/Chart.yaml" ]]; then
               echo "Validating $chart"
-              # Check if chart has dependencies and update them
-              if [[ -f "$chart/requirements.yaml" ]] || grep -q "dependencies:" "$chart/Chart.yaml"; then
+              # Check if chart has dependencies and repositories are available
+              if [[ (-f "$chart/requirements.yaml" || $(grep -q "dependencies:" "$chart/Chart.yaml")) && "${{ steps.helm-repos.outputs.repos-available }}" == "true" ]]; then
                 echo "Updating dependencies for $chart"
                 helm dependency update "$chart" || {
                   echo "Warning: Failed to update dependencies for $chart, skipping kubeconform validation"
                   continue
                 }
+              elif [[ (-f "$chart/requirements.yaml" || $(grep -q "dependencies:" "$chart/Chart.yaml")) && "${{ steps.helm-repos.outputs.repos-available }}" == "false" ]]; then
+                echo "Warning: Chart $chart has dependencies but repositories are unavailable, skipping kubeconform validation"
+                continue
               fi
               # Template the chart and validate
               echo "Templating and validating $chart..."
@@ -127,12 +156,35 @@ jobs:
           cluster_name: helm-test
           kubectl_version: v1.27.0
 
-      - name: Add Helm repositories
+      - name: Check connectivity and add Helm repositories
+        id: helm-repos-smoke
         run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo add timescale https://charts.timescale.com/
-          helm repo update
+          # Test connectivity to required repositories
+          network_ok=true
+          if ! curl -s --connect-timeout 10 https://prometheus-community.github.io/helm-charts/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach prometheus-community.github.io"
+            network_ok=false
+          fi
+          if ! curl -s --connect-timeout 10 https://grafana.github.io/helm-charts/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach grafana.github.io"
+            network_ok=false
+          fi
+          if ! curl -s --connect-timeout 10 https://charts.timescale.com/index.yaml >/dev/null 2>&1; then
+            echo "Cannot reach charts.timescale.com"
+            network_ok=false
+          fi
+          
+          if [[ "$network_ok" == "true" ]]; then
+            echo "Network connectivity OK, adding repositories..."
+            helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+            helm repo add grafana https://grafana.github.io/helm-charts
+            helm repo add timescale https://charts.timescale.com/
+            helm repo update
+            echo "repos-available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Network connectivity issues detected, skipping smoke tests that require dependencies..."
+            echo "repos-available=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Prometheus Operator CRDs
         run: |
@@ -152,8 +204,21 @@ jobs:
             --dry-run --debug
 
       - name: Test observability chart (template only - no deployment due to complexity)
+        if: steps.helm-repos-smoke.outputs.repos-available == 'true'
         run: |
           helm dependency update ./charts/observability
           helm template test-observability ./charts/observability \
             --set prometheus-stack.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=1Gi \
             --set prometheus-stack.grafana.persistence.size=1Gi
+      
+      - name: Test charts without dependencies (when repos unavailable)
+        if: steps.helm-repos-smoke.outputs.repos-available == 'false'
+        run: |
+          echo "Testing charts without external dependencies due to network connectivity issues..."
+          # Test mothership chart (no dependencies)
+          helm template test-mothership ./charts/mothership \
+            --set image.repository=nginx \
+            --set image.tag=alpine \
+            --set config.database.enabled=false \
+            --set config.loki.enabled=false
+          echo "Smoke test completed with network restrictions"
