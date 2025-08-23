@@ -1,0 +1,211 @@
+{{- if and .Values.prometheus.enabled .Values.edgebot.alertRules.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "observability.fullname" . }}-edgebot-rules
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: edgebot.mothership.slo
+      interval: 30s
+      rules:
+        # SLO: Availability - service up rate
+        - record: mothership:availability:rate5m
+          expr: |
+            avg_over_time(up{job="mothership"}[5m])
+          labels:
+            slo: availability
+            
+        - record: mothership:availability:rate1h
+          expr: |
+            avg_over_time(up{job="mothership"}[1h])
+          labels:
+            slo: availability
+            
+        - record: mothership:availability:rate1d
+          expr: |
+            avg_over_time(up{job="mothership"}[1d])
+          labels:
+            slo: availability
+
+        # SLO: Latency P95 - ingestion latency
+        - record: mothership:latency_p95:ingest:rate5m
+          expr: |
+            histogram_quantile(0.95, rate(mship_ingest_seconds_bucket[5m]))
+          labels:
+            slo: latency
+            operation: ingest
+            quantile: "95"
+            
+        - record: mothership:latency_p95:ingest:rate1h
+          expr: |
+            histogram_quantile(0.95, rate(mship_ingest_seconds_bucket[1h]))
+          labels:
+            slo: latency
+            operation: ingest
+            quantile: "95"
+
+        # SLO: Latency P99 - ingestion latency  
+        - record: mothership:latency_p99:ingest:rate5m
+          expr: |
+            histogram_quantile(0.99, rate(mship_ingest_seconds_bucket[5m]))
+          labels:
+            slo: latency
+            operation: ingest
+            quantile: "99"
+            
+        - record: mothership:latency_p99:ingest:rate1h
+          expr: |
+            histogram_quantile(0.99, rate(mship_ingest_seconds_bucket[1h]))
+          labels:
+            slo: latency
+            operation: ingest
+            quantile: "99"
+
+        # SLO: Latency P95 - pipeline processing
+        - record: mothership:latency_p95:pipeline:rate5m
+          expr: |
+            histogram_quantile(0.95, rate(mship_pipeline_seconds_bucket[5m]))
+          labels:
+            slo: latency
+            operation: pipeline
+            quantile: "95"
+
+        # SLO: Latency P95 - sink write latency by sink
+        - record: mothership:latency_p95:sink_write:rate5m
+          expr: |
+            histogram_quantile(0.95, rate(mship_sink_write_seconds_bucket[5m]))
+          labels:
+            slo: latency
+            operation: sink_write
+            quantile: "95"
+
+        # SLO: Error rate - HTTP 5xx errors
+        - record: mothership:error_rate:http:rate5m
+          expr: |
+            rate(mship_requests_total{status=~"5.."}[5m]) / rate(mship_requests_total[5m])
+          labels:
+            slo: error_rate
+            type: http
+
+        # SLO: Error budget burn rate (fast: 4h window)
+        - record: mothership:error_budget_burn:fast:4h
+          expr: |
+            (
+              (1 - mothership:availability:rate1h) > ({{ .Values.edgebot.slo.errorBudget.fastBurn.threshold }} * (1 - {{ div .Values.edgebot.slo.availability 100 }}))
+              or
+              mothership:latency_p95:ingest:rate1h > {{ .Values.edgebot.slo.latencyP95 }}
+              or
+              mothership:error_rate:http:rate5m > {{ div .Values.edgebot.slo.errorRate 100 }}
+            )
+          labels:
+            slo: error_budget_burn
+            window: fast
+            
+        # SLO: Error budget burn rate (slow: 30d window)
+        - record: mothership:error_budget_burn:slow:30d
+          expr: |
+            (
+              (1 - mothership:availability:rate1d) > ({{ .Values.edgebot.slo.errorBudget.slowBurn.threshold }} * (1 - {{ div .Values.edgebot.slo.availability 100 }}))
+            )
+          labels:
+            slo: error_budget_burn  
+            window: slow
+
+    - name: edgebot.mothership.alerts
+      rules:
+        # High ingestion latency alert - SLO breach
+        - alert: MothershipHighIngestLatencyP95
+          expr: mothership:latency_p95:ingest:rate5m > {{ .Values.edgebot.slo.latencyP95 }}
+          for: 5m
+          labels:
+            severity: warning
+            component: mothership
+            slo: latency
+          annotations:
+            summary: "Mothership ingestion P95 latency SLO breach"
+            description: "Mothership ingestion P95 latency is {{`{{ $value | humanizeDuration }}`}} (> {{`{{ `}}{{ .Values.edgebot.slo.latencyP95 }}{{`ms`}}) for 5+ minutes, breaching SLO"
+            
+        - alert: MothershipHighIngestLatencyP99
+          expr: mothership:latency_p99:ingest:rate5m > {{ .Values.edgebot.slo.latencyP99 }}
+          for: 5m
+          labels:
+            severity: warning
+            component: mothership
+            slo: latency
+          annotations:
+            summary: "Mothership ingestion P99 latency SLO breach"
+            description: "Mothership ingestion P99 latency is {{`{{ $value | humanizeDuration }}`}} (> {{`{{ `}}{{ .Values.edgebot.slo.latencyP99 }}{{`ms`}}) for 5+ minutes, breaching SLO"
+
+        # Availability SLO breach
+        - alert: MothershipAvailabilitySLOBreach
+          expr: mothership:availability:rate1h < {{ div .Values.edgebot.slo.availability 100 }}
+          for: 5m
+          labels:
+            severity: critical
+            component: mothership
+            slo: availability
+          annotations:
+            summary: "Mothership availability SLO breach"
+            description: "Mothership availability is {{`{{ $value | humanizePercentage }}`}} (< {{ .Values.edgebot.slo.availability }}%) over the past hour, breaching SLO"
+
+        # Error budget burn alerts
+        - alert: MothershipErrorBudgetBurnFast
+          expr: mothership:error_budget_burn:fast:4h
+          for: 2m
+          labels:
+            severity: critical
+            component: mothership
+            slo: error_budget
+          annotations:
+            summary: "Mothership error budget burning too fast"
+            description: "Mothership is burning through error budget too quickly ({{ .Values.edgebot.slo.errorBudget.fastBurn.threshold }}x rate over 4h window). At this rate, monthly error budget will be exhausted."
+            
+        - alert: MothershipErrorBudgetBurnSlow
+          expr: mothership:error_budget_burn:slow:30d
+          for: 15m
+          labels:
+            severity: warning
+            component: mothership  
+            slo: error_budget
+          annotations:
+            summary: "Mothership error budget burning over 30d window"
+            description: "Mothership is consistently consuming error budget over 30d window, indicating sustained SLO degradation."
+
+        # Classic alerts for operational issues
+        - alert: MothershipDown
+          expr: up{job="mothership"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            component: mothership
+            category: availability
+          annotations:
+            summary: "Mothership service is down"
+            description: "Mothership service has been unreachable for more than 1 minute"
+
+        - alert: MothershipNoIngestEvents
+          expr: increase(mship_ingest_events_total[10m]) == 0
+          for: 0m
+          labels:
+            severity: critical
+            component: mothership
+            category: data_flow
+          annotations:
+            summary: "No events ingested in the past 10 minutes"
+            description: "Mothership has not ingested any events for 10 minutes. This may indicate a problem with event sources or the ingestion pipeline."
+
+        - alert: MothershipHighHTTPErrorRate
+          expr: (rate(mship_requests_total{status=~"5.."}[5m]) / rate(mship_requests_total[5m])) > 0.1
+          for: 2m
+          labels:
+            severity: warning
+            component: mothership
+            category: errors
+          annotations:
+            summary: "High HTTP error rate detected"
+            description: "Mothership HTTP error rate is {{`{{ $value | humanizePercentage }}`}} (> 10%) for the past 5 minutes"
+{{- end }}

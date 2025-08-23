@@ -1,0 +1,232 @@
+# Default values for mothership.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Replicas configuration
+replicaCount: 1
+
+image:
+  repository: edgebot/mothership
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Application configuration
+config:
+  # Database configuration
+  database:
+    # Set to true to enable TimescaleDB sink (default: true)
+    enabled: true
+    # Database DSN (Data Source Name)
+    # Example: postgresql://user:password@timescaledb:5432/mothership
+    dsn: "postgresql://mothership:mothership@timescaledb:5432/mothership"
+    
+  # Loki configuration
+  loki:
+    # Set to true to enable Loki log sink (default: false)
+    enabled: false
+    # Loki push URL
+    url: "http://loki:3100"
+    # Optional: Loki tenant ID for multi-tenant setups
+    tenantId: ""
+    # Optional: Basic auth credentials
+    username: ""
+    password: ""
+    # Batch configuration
+    batchSize: 100
+    batchTimeoutSeconds: 5.0
+    
+  # LLM configuration
+  llm:
+    # Set to true to enable LLM processing (default: false)
+    enabled: false
+    # OpenAI API key (required if LLM is enabled)
+    apiKey: ""
+    
+  # Logging configuration
+  logging:
+    level: "INFO" # DEBUG, INFO, WARNING, ERROR
+
+# Environment variables (merged with config above)
+env: []
+  # - name: MOTHERSHIP_LOG_LEVEL
+  #   value: "DEBUG"
+  # - name: CUSTOM_VAR
+  #   value: "custom-value"
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8443
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: mothership.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: mothership-tls
+  #    hosts:
+  #      - mothership.local
+
+# Resources configuration
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Node assignment
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Security context
+podSecurityContext:
+  fsGroup: 1001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1001
+
+# Probes configuration
+probes:
+  liveness:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  readiness:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  startup:
+    enabled: true
+    path: /healthz
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+    successThreshold: 1
+
+# ServiceAccount
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# Pod annotations and labels
+podAnnotations: {}
+podLabels: {}
+
+# Monitoring configuration
+monitoring:
+  # Enable ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    # Namespace where ServiceMonitor should be created (defaults to release namespace)
+    namespace: ""
+    # Interval for scraping metrics
+    interval: 30s
+    # Scrape timeout
+    scrapeTimeout: 10s
+    # Additional labels for ServiceMonitor
+    labels: {}
+    # Additional annotations for ServiceMonitor
+    annotations: {}
+    # Path to scrape metrics from
+    path: /metrics
+    # Port name to scrape metrics from
+    portName: http
+    
+  # Enable PodMonitor for Prometheus Operator
+  podMonitor:
+    enabled: false
+    # Namespace where PodMonitor should be created (defaults to release namespace)
+    namespace: ""
+    # Interval for scraping metrics
+    interval: 30s
+    # Scrape timeout
+    scrapeTimeout: 10s
+    # Additional labels for PodMonitor
+    labels: {}
+    # Additional annotations for PodMonitor
+    annotations: {}
+    # Path to scrape metrics from
+    path: /metrics
+    # Port name to scrape metrics from
+    portName: http
+
+# Storage configuration (for potential future use)
+persistence:
+  enabled: false
+  # Storage class for persistent volumes
+  storageClass: ""
+  # Size of the persistent volume
+  size: 10Gi
+  # Access modes for the persistent volume
+  accessModes:
+    - ReadWriteOnce
+
+# External dependencies
+dependencies:
+  # TimescaleDB configuration (when deploying as dependency)
+  timescaledb:
+    enabled: false
+    # Chart configuration would go here if including as subchart
+    
+  # External services (when not using dependencies)
+  external:
+    # TimescaleDB external service
+    timescaledb:
+      host: "timescaledb"
+      port: 5432
+      database: "mothership"
+    # Loki external service
+    loki:
+      host: "loki"
+      port: 3100

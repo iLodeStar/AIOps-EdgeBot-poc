@@ -1,0 +1,19 @@
+apiVersion: v2
+name: mothership
+description: EdgeBot Mothership - Centralized Data Processing Service
+type: application
+version: 0.1.0
+appVersion: "1.5.0"
+home: https://github.com/iLodeStar/AIOps-EdgeBot-poc
+sources:
+  - https://github.com/iLodeStar/AIOps-EdgeBot-poc
+maintainers:
+  - name: EdgeBot Team
+keywords:
+  - edgebot
+  - mothership
+  - aiops
+  - data-processing
+  - observability
+annotations:
+  category: Data Processing
