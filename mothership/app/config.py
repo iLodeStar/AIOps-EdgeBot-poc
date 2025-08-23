@@ -3,11 +3,136 @@ import os
 import signal
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import yaml
 import structlog
+from pydantic import BaseModel, Field
 
 logger = structlog.get_logger()
+
+
+class LokiConfig(BaseModel):
+    """Loki sink configuration."""
+    enabled: bool = Field(default=False)
+    url: str = Field(default="http://localhost:3100")
+    tenant_id: Optional[str] = Field(default=None)
+    username: Optional[str] = Field(default=None)
+    password: Optional[str] = Field(default=None)
+    batch_size: int = Field(default=100)
+    batch_timeout_seconds: float = Field(default=5.0)
+    max_retries: int = Field(default=3)
+    retry_backoff_seconds: float = Field(default=1.0)
+    timeout_seconds: float = Field(default=30.0)
+    
+    def __init__(self, **data):
+        """Initialize LokiConfig, reading from environment variables if not provided."""
+        # Set defaults from environment variables if not explicitly provided
+        if 'enabled' not in data:
+            data['enabled'] = os.getenv('LOKI_ENABLED', 'false').lower() in ('true', '1', 'yes', 'on')
+        if 'url' not in data:
+            data['url'] = os.getenv('LOKI_URL', 'http://localhost:3100')
+        if 'tenant_id' not in data:
+            data['tenant_id'] = os.getenv('LOKI_TENANT_ID')
+        if 'username' not in data:
+            data['username'] = os.getenv('LOKI_USERNAME')
+        if 'password' not in data:
+            data['password'] = os.getenv('LOKI_PASSWORD')
+        if 'batch_size' not in data:
+            data['batch_size'] = int(os.getenv('LOKI_BATCH_SIZE', '100'))
+        if 'batch_timeout_seconds' not in data:
+            data['batch_timeout_seconds'] = float(os.getenv('LOKI_BATCH_TIMEOUT_SECONDS', '5.0'))
+        if 'max_retries' not in data:
+            data['max_retries'] = int(os.getenv('LOKI_MAX_RETRIES', '3'))
+        if 'retry_backoff_seconds' not in data:
+            data['retry_backoff_seconds'] = float(os.getenv('LOKI_RETRY_BACKOFF_SECONDS', '1.0'))
+        if 'timeout_seconds' not in data:
+            data['timeout_seconds'] = float(os.getenv('LOKI_TIMEOUT_SECONDS', '30.0'))
+        super().__init__(**data)
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dictionary-style get method for backward compatibility."""
+        return getattr(self, key, default)
+    
+    def __getitem__(self, key: str) -> Any:
+        """Dictionary-style access for backward compatibility."""
+        return getattr(self, key)
+        
+    def __setitem__(self, key: str, value: Any) -> None:
+        """Dictionary-style assignment for backward compatibility.""" 
+        setattr(self, key, value)
+        
+    def keys(self):
+        """Return the field names."""
+        return self.model_fields.keys()
+        
+    def model_dump_dict(self) -> Dict[str, Any]:
+        """Return as dictionary for compatibility."""
+        return self.model_dump()
+    
+    @classmethod
+    def from_env(cls) -> "LokiConfig":
+        """Create LokiConfig from environment variables."""
+        return cls()
+
+
+class TSDBConfig(BaseModel):
+    """TimescaleDB sink configuration.""" 
+    enabled: bool = Field(default=True)
+    host: str = Field(default="localhost")
+    port: int = Field(default=5432)
+    database: str = Field(default="edgebot")
+    username: str = Field(default="edgebot")
+    password: str = Field(default="edgebot")
+    
+    def __init__(self, **data):
+        """Initialize TSDBConfig, reading from environment variables if not provided."""
+        # Set defaults from environment variables if not explicitly provided
+        if 'enabled' not in data:
+            data['enabled'] = os.getenv('TSDB_ENABLED', 'true').lower() in ('true', '1', 'yes', 'on')
+        if 'host' not in data:
+            data['host'] = os.getenv('TSDB_HOST', 'localhost')
+        if 'port' not in data:
+            data['port'] = int(os.getenv('TSDB_PORT', '5432'))
+        if 'database' not in data:
+            data['database'] = os.getenv('TSDB_DATABASE', 'edgebot')
+        if 'username' not in data:
+            data['username'] = os.getenv('TSDB_USERNAME', 'edgebot')
+        if 'password' not in data:
+            data['password'] = os.getenv('TSDB_PASSWORD', 'edgebot')
+        super().__init__(**data)
+    
+    @classmethod
+    def from_env(cls) -> "TSDBConfig":
+        """Create TSDBConfig from environment variables."""
+        return cls()
+
+
+class AppConfig(BaseModel):
+    """Main application configuration."""
+    loki: LokiConfig = Field(default_factory=LokiConfig)
+    tsdb: TSDBConfig = Field(default_factory=TSDBConfig)
+    
+    @classmethod
+    def from_env(cls) -> "AppConfig":
+        """Create AppConfig from environment variables."""
+        return cls(
+            loki=LokiConfig(),
+            tsdb=TSDBConfig()
+        )
+    
+    def get_enabled_sinks(self) -> List[str]:
+        """Get list of enabled sink names."""
+        enabled = []
+        if self.tsdb.enabled:
+            enabled.append('tsdb')
+        if self.loki.enabled:
+            enabled.append('loki')
+        return enabled
+
+
+def get_config() -> AppConfig:
+    """Get application configuration from environment."""
+    return AppConfig.from_env()
 
 class ConfigManager:
     """Manages configuration loading and hot-reloading with dual-sink support."""

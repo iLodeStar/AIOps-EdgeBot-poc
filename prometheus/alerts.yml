@@ -1,0 +1,107 @@
+# Prometheus alerting rules for EdgeBot mothership
+groups:
+  - name: mothership.rules
+    rules:
+      # High ingestion latency alert - when p95 latency > 1s for 5 minutes
+      - alert: HighIngestLatency95th
+        expr: histogram_quantile(0.95, rate(mship_ingest_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          component: mothership
+          category: latency
+        annotations:
+          summary: "High ingestion latency detected"
+          description: "Mothership ingestion p95 latency is {{ $value }}s (> 1s) for the past 5 minutes"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#high-ingest-latency"
+
+      # High pipeline processing latency - when p95 latency > 1s for 5 minutes  
+      - alert: HighPipelineLatency95th
+        expr: histogram_quantile(0.95, rate(mship_pipeline_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          component: mothership
+          category: latency
+        annotations:
+          summary: "High pipeline processing latency detected"
+          description: "Mothership pipeline p95 latency is {{ $value }}s (> 1s) for the past 5 minutes"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#high-pipeline-latency"
+
+      # High sink write latency per sink - when p95 latency > 1s for 5 minutes
+      - alert: HighSinkWriteLatency95th
+        expr: histogram_quantile(0.95, rate(mship_sink_write_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          component: mothership
+          category: latency
+        annotations:
+          summary: "High sink write latency detected for {{ $labels.sink }}"
+          description: "Mothership {{ $labels.sink }} sink write p95 latency is {{ $value }}s (> 1s) for the past 5 minutes"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#high-sink-write-latency"
+
+      # No ingestion events for 10 minutes
+      - alert: NoIngestEvents
+        expr: increase(mship_ingest_events_total[10m]) == 0
+        for: 0m
+        labels:
+          severity: critical
+          component: mothership
+          category: availability
+        annotations:
+          summary: "No events ingested in the past 10 minutes"
+          description: "Mothership has not ingested any events for 10 minutes. This may indicate a problem with event sources or the ingestion pipeline."
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#no-ingest-events"
+
+      # No Loki writes for 10 minutes (when Loki is enabled and should be receiving data)
+      - alert: LokiWritesZero
+        expr: increase(mship_sink_written_total{sink="loki"}[10m]) == 0 and on() mship_loki_queue_size > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: mothership
+          category: sinks
+        annotations:
+          summary: "No Loki writes detected despite queued events"
+          description: "Mothership has not written events to Loki for 10 minutes despite having {{ $value }} events queued"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#loki-writes-zero"
+
+      # No TimescaleDB writes for 10 minutes (when TSDB is enabled)
+      - alert: TSDBWritesZero
+        expr: increase(mship_sink_written_total{sink="timescaledb"}[10m]) == 0 and increase(mship_ingest_events_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          component: mothership
+          category: sinks
+        annotations:
+          summary: "No TimescaleDB writes detected despite ingested events"
+          description: "Mothership has not written events to TimescaleDB for 10 minutes despite ingesting {{ $value }} events"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#tsdb-writes-zero"
+
+      # High error rate on HTTP requests
+      - alert: HighHTTPErrorRate
+        expr: (rate(mship_requests_total{status=~"5.."}[5m]) / rate(mship_requests_total[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+          component: mothership
+          category: errors
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Mothership HTTP error rate is {{ $value | humanizePercentage }} (> 10%) for the past 5 minutes"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#high-http-error-rate"
+
+      # Mothership service down
+      - alert: MothershipDown
+        expr: up{job="mothership"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: mothership
+          category: availability
+        annotations:
+          summary: "Mothership service is down"
+          description: "Mothership service has been unreachable for more than 1 minute"
+          runbook_url: "https://github.com/iLodeStar/AIOps-EdgeBot-poc/blob/main/docs/OBSERVABILITY.md#mothership-down"

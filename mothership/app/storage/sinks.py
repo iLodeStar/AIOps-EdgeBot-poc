@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 import structlog
 
 from .loki import LokiClient
+from ..metrics import mship_sink_write_seconds
 
 logger = structlog.get_logger(__name__)
 
@@ -189,9 +190,11 @@ class SinksManager:
         return results
     
     async def _safe_write(self, name: str, sink: StorageSink, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Safely write to a sink with error handling."""
+        """Safely write to a sink with error handling and metrics observation."""
         try:
-            return await sink.write_events(events)
+            # Observe per-sink write latency as required
+            with mship_sink_write_seconds.labels(sink=name).time():
+                return await sink.write_events(events)
         except Exception as e:
             logger.error("Sink write exception", sink=name, error=str(e))
             return {"written": 0, "errors": len(events)}
