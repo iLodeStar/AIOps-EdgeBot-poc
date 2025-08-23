@@ -235,10 +235,66 @@ class ConfigManager:
             self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_size'] = int(os.getenv('LOKI_BATCH_SIZE'))
         if os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'):
             self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_timeout_seconds'] = float(os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'))
+
+        # Loki reliability configuration
+        if os.getenv('LOKI_MAX_RETRIES'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['max_retries'] = int(os.getenv('LOKI_MAX_RETRIES'))
+        if os.getenv('LOKI_INITIAL_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['initial_backoff_ms'] = int(os.getenv('LOKI_INITIAL_BACKOFF_MS'))
+        if os.getenv('LOKI_MAX_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['max_backoff_ms'] = int(os.getenv('LOKI_MAX_BACKOFF_MS'))
+        if os.getenv('LOKI_JITTER_FACTOR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['jitter_factor'] = float(os.getenv('LOKI_JITTER_FACTOR'))
+        if os.getenv('LOKI_TIMEOUT_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('retry', {})['timeout_ms'] = int(os.getenv('LOKI_TIMEOUT_MS'))
+        if os.getenv('LOKI_FAILURE_THRESHOLD'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['failure_threshold'] = int(os.getenv('LOKI_FAILURE_THRESHOLD'))
+        if os.getenv('LOKI_OPEN_DURATION_SEC'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['open_duration_sec'] = int(os.getenv('LOKI_OPEN_DURATION_SEC'))
+        if os.getenv('LOKI_HALF_OPEN_MAX_INFLIGHT'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('circuit_breaker', {})['half_open_max_inflight'] = int(os.getenv('LOKI_HALF_OPEN_MAX_INFLIGHT'))
+        if os.getenv('LOKI_QUEUE_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['enabled'] = os.getenv('LOKI_QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('LOKI_QUEUE_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_dir'] = os.getenv('LOKI_QUEUE_DIR')
+        if os.getenv('LOKI_QUEUE_MAX_BYTES'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_max_bytes'] = int(os.getenv('LOKI_QUEUE_MAX_BYTES'))
+        if os.getenv('LOKI_QUEUE_FLUSH_INTERVAL_MS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['queue_flush_interval_ms'] = int(os.getenv('LOKI_QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('LOKI_DLQ_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {}).setdefault('queue', {})['dlq_dir'] = os.getenv('LOKI_DLQ_DIR')
         
         # TimescaleDB sink configuration - NEW
         if os.getenv('TSDB_ENABLED'):
             self._config.setdefault('sinks', {}).setdefault('timescaledb', {})['enabled'] = os.getenv('TSDB_ENABLED').lower() in ('true', '1', 'yes', 'on')
+
+        # TSDB reliability configuration
+        if os.getenv('TSDB_MAX_RETRIES'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['max_retries'] = int(os.getenv('TSDB_MAX_RETRIES'))
+        if os.getenv('TSDB_INITIAL_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['initial_backoff_ms'] = int(os.getenv('TSDB_INITIAL_BACKOFF_MS'))
+        if os.getenv('TSDB_MAX_BACKOFF_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['max_backoff_ms'] = int(os.getenv('TSDB_MAX_BACKOFF_MS'))
+        if os.getenv('TSDB_JITTER_FACTOR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['jitter_factor'] = float(os.getenv('TSDB_JITTER_FACTOR'))
+        if os.getenv('TSDB_TIMEOUT_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('retry', {})['timeout_ms'] = int(os.getenv('TSDB_TIMEOUT_MS'))
+        if os.getenv('TSDB_FAILURE_THRESHOLD'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['failure_threshold'] = int(os.getenv('TSDB_FAILURE_THRESHOLD'))
+        if os.getenv('TSDB_OPEN_DURATION_SEC'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['open_duration_sec'] = int(os.getenv('TSDB_OPEN_DURATION_SEC'))
+        if os.getenv('TSDB_HALF_OPEN_MAX_INFLIGHT'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('circuit_breaker', {})['half_open_max_inflight'] = int(os.getenv('TSDB_HALF_OPEN_MAX_INFLIGHT'))
+        if os.getenv('TSDB_QUEUE_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['enabled'] = os.getenv('TSDB_QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('TSDB_QUEUE_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_dir'] = os.getenv('TSDB_QUEUE_DIR')
+        if os.getenv('TSDB_QUEUE_MAX_BYTES'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_max_bytes'] = int(os.getenv('TSDB_QUEUE_MAX_BYTES'))
+        if os.getenv('TSDB_QUEUE_FLUSH_INTERVAL_MS'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['queue_flush_interval_ms'] = int(os.getenv('TSDB_QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('TSDB_DLQ_DIR'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['dlq_dir'] = os.getenv('TSDB_DLQ_DIR')
         
         # Logging
         if os.getenv('MOTHERSHIP_LOG_LEVEL'):
