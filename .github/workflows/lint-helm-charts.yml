@@ -153,7 +153,9 @@ jobs:
               fi
               # Template the chart and validate
               echo "Templating and validating $chart..."
-              if ! helm template test-release "$chart" | kubeconform -strict -summary -verbose; then
+              # Use -ignore-missing-schemas to skip validation for CRDs not available in kubeconform
+              # This allows validation of standard K8s resources while skipping Prometheus Operator CRDs
+              if ! helm template test-release "$chart" | kubeconform -strict -summary -verbose -ignore-missing-schemas; then
                 echo "Error: kubeconform validation failed for $chart"
                 exit 1
               fi
