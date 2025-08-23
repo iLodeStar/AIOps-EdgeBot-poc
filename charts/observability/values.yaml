@@ -1,0 +1,296 @@
+# Default values for observability.
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  # Image registry
+  imageRegistry: ""
+  # Additional labels to add to all resources
+  commonLabels: {}
+  # Additional annotations to add to all resources
+  commonAnnotations: {}
+
+# Prometheus stack configuration
+prometheus:
+  enabled: true
+  # Enable default Prometheus Operator (kube-prometheus-stack)
+  operator: true
+
+# Loki configuration
+loki:
+  enabled: true
+  # Use standalone Loki chart vs integrated
+  standalone: false
+  # Use test schema for CI and quick testing
+  useTestSchema: true
+  # Deploy as single binary (not distributed)
+  deploymentMode: SingleBinary
+  # Configuration for Loki
+  loki:
+    # Enable test schema for quick testing without persistence  
+    useTestSchema: true
+    # For production, uncomment and configure proper schema
+    # schemaConfig:
+    #   configs:
+    #     - from: 2020-10-24
+    #       store: boltdb-shipper
+    #       object_store: filesystem
+    #       schema: v11
+    #       index:
+    #         prefix: index_
+    #         period: 24h
+    # Storage configuration for test schema - simple filesystem
+    storage:
+      type: filesystem
+    # Resource limits
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+  # Explicitly disable distributed components to avoid object storage requirement
+  backend:
+    replicas: 0
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  # Enable single binary mode
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: false  # Disable persistence for testing
+
+# Grafana configuration
+grafana:
+  # Enable Grafana deployment
+  enabled: true
+  # Use standalone Grafana chart vs kube-prometheus-stack included Grafana
+  standalone: false
+
+# Alertmanager configuration
+alertmanager:
+  enabled: true
+
+# Configuration for kube-prometheus-stack
+prometheus-stack:
+  # Override default configuration
+  nameOverride: ""
+  fullnameOverride: ""
+  
+  # Prometheus configuration
+  prometheus:
+    prometheusSpec:
+      # Retention settings
+      retention: 30d
+      retentionSize: 50GiB
+      # Storage configuration
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: ""
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 50Gi
+      # Resource requirements
+      resources:
+        limits:
+          cpu: 2000m
+          memory: 8Gi
+        requests:
+          cpu: 1000m
+          memory: 4Gi
+      # Additional scrape configs for EdgeBot services
+      additionalScrapeConfigs:
+        - job_name: 'mothership'
+          static_configs:
+            - targets: ['mothership:8080']
+          metrics_path: /metrics
+          scrape_interval: 30s
+          scrape_timeout: 10s
+          honor_labels: true
+      # Service monitor selector
+      serviceMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelector: {}
+      podMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelector: {}
+      ruleSelectorNilUsesHelmValues: false
+      ruleSelector: {}
+      
+  # Grafana configuration
+  grafana:
+    enabled: true
+    adminPassword: "admin"
+    # Persistence
+    persistence:
+      enabled: true
+      storageClassName: ""
+      size: 10Gi
+    # Resource requirements
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    # Dashboards
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+        - name: 'edgebot'
+          orgId: 1
+          folder: 'EdgeBot'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/edgebot
+    # Dashboard configuration maps
+    dashboards:
+      edgebot:
+        edgebot-observability:
+          # This will be populated with the dashboard JSON
+          gnetId: null
+          datasource: Prometheus
+        edgebot-slo:
+          # This will be populated with SLO dashboard JSON
+          gnetId: null
+          datasource: Prometheus
+    # Additional datasources
+    additionalDataSources: []
+    # SMTP configuration (optional)
+    smtp:
+      enabled: false
+      host: ""
+      user: ""
+      password: ""
+      from_address: "grafana@example.com"
+      from_name: "Grafana"
+      
+  # Alertmanager configuration
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      # Storage configuration
+      storage:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: ""
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 5Gi
+      # Resource requirements
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 250m
+          memory: 256Mi
+      # Configuration
+      config:
+        global:
+          smtp_smarthost: 'localhost:587'
+          smtp_from: 'alertmanager@example.com'
+          smtp_auth_username: 'alertmanager@example.com'
+          smtp_auth_password: 'password'
+        route:
+          group_by: ['alertname']
+          group_wait: 30s
+          group_interval: 5m
+          repeat_interval: 12h
+          receiver: 'web.hook'
+          routes:
+          - match:
+              alertname: MothershipDown
+            receiver: critical-alerts
+          - match:
+              severity: critical
+            receiver: critical-alerts
+          - match:
+              severity: warning
+            receiver: warning-alerts
+        receivers:
+        - name: 'web.hook'
+          # Default receiver (null receiver for non-critical alerts)
+        - name: 'critical-alerts'
+          # Configure for critical alerts - email, slack, etc.
+          # email_configs:
+          # - to: 'admin@example.com'
+          #   subject: 'Critical Alert: {{ .GroupLabels.alertname }}'
+          #   body: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+        - name: 'warning-alerts'
+          # Configure for warning alerts
+        inhibit_rules:
+        - source_match:
+            severity: 'critical'
+          target_match:
+            severity: 'warning'
+          equal: ['alertname', 'dev', 'instance']
+
+# Standalone Loki configuration (if not using kube-prometheus-stack)
+loki-standalone:
+  enabled: false
+  # Loki configuration
+  loki:
+    # Storage configuration
+    schemaConfig:
+      configs:
+        - from: 2020-10-24
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storageConfig:
+      boltdb_shipper:
+        active_index_directory: /loki/boltdb-shipper-active
+        cache_location: /loki/boltdb-shipper-cache
+        cache_ttl: 24h
+        shared_store: filesystem
+      filesystem:
+        directory: /loki/chunks
+    # Resource requirements
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    # Persistence
+    persistence:
+      enabled: true
+      storageClassName: ""
+      size: 20Gi
+
+# EdgeBot specific configurations
+edgebot:
+  # Namespace where EdgeBot mothership is deployed
+  mothershipNamespace: "default"
+  # Service name of the mothership
+  mothershipServiceName: "mothership"
+  # Additional alert rules specific to EdgeBot
+  alertRules:
+    enabled: true
+  # SLO configuration
+  slo:
+    # SLO targets (as percentages)
+    availability: 99.9
+    latencyP95: 1000  # milliseconds
+    latencyP99: 2000  # milliseconds
+    errorRate: 1.0    # percentage
+    # Error budget burn rates
+    errorBudget:
+      # Fast burn: 4h window (14.4x burn rate)
+      fastBurn:
+        window: "4h"
+        threshold: 14.4
+      # Slow burn: 30d window (1x burn rate)  
+      slowBurn:
+        window: "30d"
+        threshold: 1.0

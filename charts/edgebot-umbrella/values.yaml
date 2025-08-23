@@ -1,0 +1,276 @@
+# Default values for edgebot-umbrella.
+# This is a YAML-formatted file.
+
+# Global settings that affect all subcharts
+global:
+  # Image registry override
+  imageRegistry: ""
+  # Global labels applied to all resources
+  commonLabels:
+    app.kubernetes.io/part-of: edgebot
+  # Global annotations
+  commonAnnotations: {}
+
+# Mothership configuration
+mothership:
+  # Enable mothership deployment
+  enabled: true
+  
+  # Override mothership chart values
+  replicaCount: 1
+  
+  image:
+    repository: edgebot/mothership
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+  
+  # Application configuration
+  config:
+    database:
+      enabled: true
+      # Will be automatically configured to use TimescaleDB if enabled
+      dsn: ""  # Auto-generated if timescaledb.enabled=true
+    loki:
+      enabled: true
+      # Will be automatically configured to use observability Loki if enabled
+      url: ""  # Auto-generated if observability.enabled=true
+    llm:
+      enabled: false
+      apiKey: ""
+    logging:
+      level: "INFO"
+  
+  # Resource configuration
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Enable monitoring if observability is enabled
+  monitoring:
+    serviceMonitor:
+      enabled: true
+    podMonitor:
+      enabled: false
+
+# Observability stack configuration  
+observability:
+  # Enable observability stack
+  enabled: true
+  
+  # Prometheus configuration
+  prometheus:
+    enabled: true
+    operator: true
+    
+  # Loki configuration
+  loki:
+    enabled: true
+    standalone: false
+    
+  # Grafana configuration
+  grafana:
+    enabled: true
+    standalone: false
+    
+  # Alertmanager configuration
+  alertmanager:
+    enabled: true
+  
+  # Override prometheus-stack values
+  prometheus-stack:
+    prometheus:
+      prometheusSpec:
+        retention: 30d
+        retentionSize: 50GiB
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: ""
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 50Gi
+        # Auto-configure mothership scraping
+        additionalScrapeConfigs:
+          - job_name: 'mothership'
+            kubernetes_sd_configs:
+              - role: service
+                namespaces:
+                  names: 
+                    - '{{ .Release.Namespace }}'
+            relabel_configs:
+              - source_labels: [__meta_kubernetes_service_name]
+                action: keep
+                regex: '.*mothership.*'
+              - source_labels: [__meta_kubernetes_service_port_name]
+                action: keep
+                regex: 'http'
+            metrics_path: /metrics
+            scrape_interval: 30s
+            scrape_timeout: 10s
+            honor_labels: true
+    
+    grafana:
+      adminPassword: "admin"
+      persistence:
+        enabled: true
+        size: 10Gi
+      # Auto-configure Loki datasource
+      additionalDataSources:
+        - name: Loki
+          type: loki
+          access: proxy
+          url: http://{{ include "edgebot-umbrella.fullname" . }}-observability-loki:3100
+          isDefault: false
+  
+  # EdgeBot specific configuration
+  edgebot:
+    mothershipNamespace: '{{ .Release.Namespace }}'
+    mothershipServiceName: '{{ include "edgebot-umbrella.fullname" . }}-mothership'
+    alertRules:
+      enabled: true
+    slo:
+      availability: 99.9
+      latencyP95: 1000
+      latencyP99: 2000
+      errorRate: 1.0
+
+# TimescaleDB configuration (optional)
+timescaledb:
+  # Enable TimescaleDB deployment
+  enabled: false
+  
+  # TimescaleDB configuration
+  fullnameOverride: "timescaledb"
+  
+  # Connection configuration
+  connection:
+    user: 
+      name: mothership
+      password: mothership
+    database: mothership
+  
+  # Storage configuration
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClass: ""
+  
+  # Resource configuration
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 1000m
+    limits:
+      memory: 4Gi
+      cpu: 2000m
+
+# Deployment profiles for different environments
+profiles:
+  # Development profile - minimal resources
+  development:
+    enabled: false
+    mothership:
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+      config:
+        logging:
+          level: "DEBUG"
+    observability:
+      prometheus-stack:
+        prometheus:
+          prometheusSpec:
+            retention: 7d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  resources:
+                    requests:
+                      storage: 10Gi
+        grafana:
+          persistence:
+            size: 1Gi
+    timescaledb:
+      persistence:
+        size: 10Gi
+      resources:
+        requests:
+          memory: 512Mi
+          cpu: 250m
+        limits:
+          memory: 1Gi
+          cpu: 500m
+
+  # Production profile - high availability and resources
+  production:
+    enabled: false
+    mothership:
+      replicaCount: 3
+      resources:
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+      autoscaling:
+        enabled: true
+        minReplicas: 3
+        maxReplicas: 10
+        targetCPUUtilizationPercentage: 70
+      podDisruptionBudget:
+        enabled: true
+        minAvailable: 2
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - mothership
+                topologyKey: kubernetes.io/hostname
+    observability:
+      prometheus-stack:
+        prometheus:
+          prometheusSpec:
+            replicas: 2
+            retention: 90d
+            retentionSize: 200GiB
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  resources:
+                    requests:
+                      storage: 200Gi
+        alertmanager:
+          alertmanagerSpec:
+            replicas: 3
+        grafana:
+          replicas: 2
+          persistence:
+            size: 20Gi
+    timescaledb:
+      replicas: 3
+      persistence:
+        size: 500Gi
+      resources:
+        requests:
+          memory: 8Gi
+          cpu: 4000m
+        limits:
+          memory: 16Gi
+          cpu: 8000m

@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mothership.fullname" . }}-config
+  labels:
+    {{- include "mothership.labels" . | nindent 4 }}
+data:
+  # Database configuration
+  TSDB_ENABLED: {{ .Values.config.database.enabled | quote }}
+  MOTHERSHIP_DB_DSN: {{ include "mothership.databaseDsn" . | quote }}
+  
+  # Loki configuration
+  LOKI_ENABLED: {{ .Values.config.loki.enabled | quote }}
+  {{- if .Values.config.loki.enabled }}
+  LOKI_URL: {{ include "mothership.lokiUrl" . | quote }}
+  {{- if .Values.config.loki.tenantId }}
+  LOKI_TENANT_ID: {{ .Values.config.loki.tenantId | quote }}
+  {{- end }}
+  {{- if .Values.config.loki.username }}
+  LOKI_USERNAME: {{ .Values.config.loki.username | quote }}
+  {{- end }}
+  LOKI_BATCH_SIZE: {{ .Values.config.loki.batchSize | quote }}
+  LOKI_BATCH_TIMEOUT_SECONDS: {{ .Values.config.loki.batchTimeoutSeconds | quote }}
+  {{- end }}
+  
+  # LLM configuration
+  MOTHERSHIP_LLM_ENABLED: {{ .Values.config.llm.enabled | quote }}
+  
+  # Logging configuration
+  MOTHERSHIP_LOG_LEVEL: {{ .Values.config.logging.level | quote }}

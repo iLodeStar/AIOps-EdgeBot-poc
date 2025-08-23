@@ -1,0 +1,35 @@
+apiVersion: v2
+name: edgebot-umbrella
+description: EdgeBot Complete Deployment - Mothership and Observability Stack
+type: application
+version: 0.1.0
+appVersion: "1.5.0"
+home: https://github.com/iLodeStar/AIOps-EdgeBot-poc
+icon: https://raw.githubusercontent.com/iLodeStar/AIOps-EdgeBot-poc/main/docs/images/edgebot-icon.png
+sources:
+  - https://github.com/iLodeStar/AIOps-EdgeBot-poc
+maintainers:
+  - name: EdgeBot Team
+    email: team@edgebot.com
+keywords:
+  - edgebot
+  - mothership
+  - observability
+  - aiops
+  - complete-deployment
+dependencies:
+  - name: mothership
+    version: "0.1.0"
+    repository: "file://../mothership"
+    condition: mothership.enabled
+  - name: observability
+    version: "0.1.0" 
+    repository: "file://../observability"
+    condition: observability.enabled
+  - name: timescaledb-single
+    version: "~0.32.0"
+    repository: https://charts.timescale.com/
+    condition: timescaledb.enabled
+    alias: timescaledb
+annotations:
+  category: Complete Stack

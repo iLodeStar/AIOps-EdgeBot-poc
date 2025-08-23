@@ -1,0 +1,185 @@
+# Production values for EdgeBot
+# High availability, security, and performance
+
+profiles:
+  production:
+    enabled: true
+
+mothership:
+  replicaCount: 3
+  image:
+    repository: your-registry.com/edgebot/mothership
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  
+  config:
+    logging:
+      level: "INFO"
+    database:
+      enabled: true
+    loki:
+      enabled: true
+      batchSize: 1000
+      batchTimeoutSeconds: 10
+    llm:
+      enabled: true
+      apiKey: ""  # Set via environment or external secret
+  
+  monitoring:
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [mothership]
+            topologyKey: kubernetes.io/hostname
+
+observability:
+  enabled: true
+  prometheus-stack:
+    prometheus:
+      prometheusSpec:
+        replicas: 2
+        retention: 90d
+        retentionSize: 200GiB
+        resources:
+          requests:
+            cpu: 2000m
+            memory: 8Gi
+          limits:
+            cpu: 4000m
+            memory: 16Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: "fast-ssd"
+              resources:
+                requests:
+                  storage: 200Gi
+    
+    grafana:
+      replicas: 2
+      adminPassword: ""  # Set via external secret
+      persistence:
+        enabled: true
+        size: 20Gi
+        storageClassName: "standard"
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+    
+    alertmanager:
+      alertmanagerSpec:
+        replicas: 3
+        resources:
+          requests:
+            cpu: 200m
+            memory: 400Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        config:
+          global:
+            smtp_smarthost: 'smtp.company.com:587'
+            smtp_from: 'edgebot-alerts@company.com'
+            smtp_auth_username: 'edgebot-alerts@company.com'
+            smtp_auth_password: 'smtp-password'
+          route:
+            group_by: ['alertname', 'cluster', 'service']
+            group_wait: 10s
+            group_interval: 10s
+            repeat_interval: 1h
+            receiver: 'web.hook'
+            routes:
+            - match:
+                alertname: MothershipDown
+              receiver: critical-alerts
+              group_wait: 0s
+            - match:
+                severity: critical
+              receiver: critical-alerts
+            - match:
+                severity: warning
+              receiver: warning-alerts
+          receivers:
+          - name: 'web.hook'
+            # Default null receiver
+          - name: 'critical-alerts'
+            email_configs:
+            - to: 'oncall@company.com'
+              subject: 'EdgeBot CRITICAL: {{ .GroupLabels.alertname }}'
+              body: |
+                {{ range .Alerts }}
+                Alert: {{ .Annotations.summary }}
+                Description: {{ .Annotations.description }}
+                Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+                {{ end }}
+            slack_configs:
+            - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+              channel: '#alerts-critical'
+              title: 'EdgeBot Critical Alert'
+              text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+          - name: 'warning-alerts'
+            slack_configs:
+            - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+              channel: '#alerts-warning'
+              title: 'EdgeBot Warning'
+              text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+timescaledb:
+  enabled: true
+  replicas: 3
+  persistence:
+    enabled: true
+    size: 500Gi
+    storageClassName: "fast-ssd"
+  resources:
+    requests:
+      memory: 8Gi
+      cpu: 4000m
+    limits:
+      memory: 16Gi
+      cpu: 8000m
+  
+  # Security configurations
+  securityContext:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+  
+  # Backup configuration
+  backup:
+    enabled: true
+    schedule: "0 2 * * *"
+    retention: "30d"
