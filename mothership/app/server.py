@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, ValidationError
 import structlog
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from .config import ConfigManager
 from .pipeline.processor import Pipeline
@@ -21,6 +21,20 @@ from .storage.tsdb import TimescaleDBWriter
 # Import dual-sink components
 from .storage.sinks import SinksManager  # NEW: dual-sink support
 from .storage.loki import LokiClient  # NEW: Loki support
+# Import new metrics module
+from .metrics import (
+    get_metrics_content,
+    mship_ingest_batches_total,
+    mship_ingest_events_total,
+    mship_written_events_total,
+    mship_sink_written_total,
+    mship_ingest_seconds,
+    mship_pipeline_seconds,
+    mship_sink_write_seconds,
+    mship_requests_total,
+    mship_active_connections,
+    mship_loki_queue_size
+)
 
 # Configure logging
 structlog.configure(
@@ -40,17 +54,6 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
-
-# Prometheus metrics
-INGESTION_REQUESTS = Counter('mothership_ingestion_requests_total', 'Total ingestion requests', ['status'])
-INGESTION_EVENTS = Counter('mothership_ingestion_events_total', 'Total events processed')
-INGESTION_DURATION = Histogram('mothership_ingestion_duration_seconds', 'Request processing duration')
-PIPELINE_DURATION = Histogram('mothership_pipeline_duration_seconds', 'Pipeline processing duration')
-DATABASE_WRITES = Counter('mothership_database_writes_total', 'Total database writes', ['status'])
-ACTIVE_CONNECTIONS = Gauge('mothership_active_connections', 'Active database connections')
-# NEW: dual-sink metrics
-SINK_WRITES = Counter('mothership_sink_writes_total', 'Total sink writes', ['sink', 'status'])
-LOKI_QUEUE_SIZE = Gauge('mothership_loki_queue_size', 'Loki batch queue size')
 
 # Pydantic models
 class Event(BaseModel):
@@ -210,7 +213,7 @@ async def shutdown_event():
     logger.info("Mothership service shut down complete")
 
 @app.post("/ingest", response_model=IngestResponse)
-@INGESTION_DURATION.time()
+@mship_ingest_seconds.time()
 async def ingest_events(request: IngestRequest) -> IngestResponse:
     """Ingest events for processing with dual-sink support."""
     start_time = time.time()
@@ -218,7 +221,7 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
     try:
         events = request.messages
         if not events:
-            INGESTION_REQUESTS.labels(status='empty').inc()
+            mship_requests_total.labels(method='POST', endpoint='/ingest', status='400').inc()
             return IngestResponse(
                 status="success",
                 processed_events=0,
@@ -227,13 +230,14 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
             )
         
         logger.info(f"Processing {len(events)} events")
-        INGESTION_EVENTS.inc(len(events))
+        mship_ingest_batches_total.inc()
+        mship_ingest_events_total.inc(len(events))
         
         # Process events through pipeline
         pipeline = app_state['pipeline']
         processed_events = []
         
-        with PIPELINE_DURATION.time():
+        with mship_pipeline_seconds.time():
             for event in events:
                 try:
                     # Convert to dict for pipeline processing
@@ -248,18 +252,21 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
         sinks_manager = app_state['sinks_manager']
         sink_results = await sinks_manager.write_events(processed_events)
         
-        # Update metrics
+        # Update metrics as per requirements
+        total_written = 0
         for sink_name, result in sink_results.items():
-            SINK_WRITES.labels(sink=sink_name, status='success').inc(result.get('written', 0))
-            if result.get('errors', 0) > 0:
-                SINK_WRITES.labels(sink=sink_name, status='error').inc(result.get('errors', 0))
+            written_count = result.get('written', 0)
+            mship_sink_written_total.labels(sink=sink_name).inc(written_count)
+            total_written += written_count
+        
+        mship_written_events_total.inc(total_written)
         
         # Update Loki queue size metric if Loki is enabled
         if 'loki' in sink_results:
-            LOKI_QUEUE_SIZE.set(sink_results['loki'].get('queued', 0))
+            mship_loki_queue_size.set(sink_results['loki'].get('queued', 0))
         
         processing_time = time.time() - start_time
-        INGESTION_REQUESTS.labels(status='success').inc()
+        mship_requests_total.labels(method='POST', endpoint='/ingest', status='200').inc()
         
         logger.info(f"Successfully processed {len(processed_events)} events", 
                    processing_time=processing_time,
@@ -273,7 +280,7 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
         )
         
     except Exception as e:
-        INGESTION_REQUESTS.labels(status='error').inc()
+        mship_requests_total.labels(method='POST', endpoint='/ingest', status='500').inc()
         logger.error("Error during ingestion", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -336,9 +343,9 @@ async def metrics():
     """Prometheus metrics endpoint."""
     # Update active connections gauge
     if app_state.get('tsdb_writer'):
-        ACTIVE_CONNECTIONS.set(app_state['tsdb_writer'].get_active_connections())
+        mship_active_connections.set(app_state['tsdb_writer'].get_active_connections())
     
-    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    return PlainTextResponse(get_metrics_content(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/stats")
 async def get_stats() -> Dict[str, Any]:
