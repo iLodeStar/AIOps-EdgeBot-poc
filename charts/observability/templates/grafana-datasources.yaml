@@ -1,0 +1,25 @@
+{{- if and .Values.prometheus.enabled .Values.loki.enabled .Values.grafana.enabled (not .Values.grafana.standalone) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "observability.fullname" . }}-grafana-loki-datasource
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+    grafana_datasource: "1"
+data:
+  loki-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://{{ include "observability.lokiUrl" . }}:3100
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+        timeout: 60
+        httpHeaderName1: "X-Scope-OrgID"
+      secureJsonData:
+        httpHeaderValue1: "1"
+{{- end }}
