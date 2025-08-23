@@ -2,5 +2,9 @@ pytest
 pytest-asyncio
 pytest-cov
 pytest-html
+pytest-xdist
 aiohttp
 black
+requests
+psutil
+python-dotenv
