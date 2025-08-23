@@ -7,6 +7,7 @@ import structlog
 
 from .loki import LokiClient
 from ..metrics import mship_sink_write_seconds
+from ..reliability import CircuitBreaker, RetryManager, IdempotencyManager
 
 logger = structlog.get_logger(__name__)
 
@@ -122,14 +123,29 @@ class SinksManager:
         self.config = config
         self.sinks: Dict[str, StorageSink] = {}
         
+        # Get sink defaults and idempotency config
+        self.sink_defaults = config.get('sink_defaults', {})
+        idempotency_config = config.get('idempotency', {})
+        
+        # Initialize reliability components
+        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
+        self.retry_managers: Dict[str, RetryManager] = {}
+        self.idempotency_manager = IdempotencyManager(idempotency_config)
+        
         # Initialize sinks based on configuration
         sinks_config = config.get('sinks', {})
         
         if sinks_config.get('timescaledb', {}).get('enabled', True):
-            self.sinks["tsdb"] = TSDBSink(sinks_config.get('timescaledb', {}))
+            sink_name = "tsdb"
+            self.sinks[sink_name] = TSDBSink(sinks_config.get('timescaledb', {}))
+            self.circuit_breakers[sink_name] = CircuitBreaker(sink_name, self.sink_defaults)
+            self.retry_managers[sink_name] = RetryManager(sink_name, self.sink_defaults)
             
         if sinks_config.get('loki', {}).get('enabled', False):
-            self.sinks["loki"] = LokiSink(sinks_config.get('loki', {}))
+            sink_name = "loki"
+            self.sinks[sink_name] = LokiSink(sinks_config.get('loki', {}))
+            self.circuit_breakers[sink_name] = CircuitBreaker(sink_name, self.sink_defaults)
+            self.retry_managers[sink_name] = RetryManager(sink_name, self.sink_defaults)
     
     async def start(self):
         """Start all enabled sinks."""
@@ -161,12 +177,29 @@ class SinksManager:
         if not events:
             return {}
         
-        # Fan out writes to all sinks concurrently
+        # Check for duplicate batch using idempotency
+        batch_key = self.idempotency_manager.generate_batch_key(events)
+        if self.idempotency_manager.is_duplicate(batch_key):
+            logger.info("Skipping duplicate batch", 
+                       events=len(events), 
+                       batch_key=batch_key[:8])
+            # Return successful results for all sinks to avoid retries
+            return {name: {"written": len(events), "errors": 0} for name in self.sinks.keys()}
+        
+        # Fan out writes to all sinks concurrently (with circuit breaker protection)
         write_tasks = {}
         for name, sink in self.sinks.items():
-            write_tasks[name] = asyncio.create_task(
-                self._safe_write(name, sink, events)
-            )
+            circuit_breaker = self.circuit_breakers[name]
+            if circuit_breaker.can_execute():
+                write_tasks[name] = asyncio.create_task(
+                    self._reliable_write(name, sink, events)
+                )
+            else:
+                logger.warning("Skipping sink due to open circuit breaker", sink=name)
+                # Return error result for circuit-broken sinks
+                write_tasks[name] = asyncio.create_task(
+                    asyncio.coroutine(lambda: {"written": 0, "errors": len(events)})()
+                )
         
         # Wait for all writes to complete
         results = {}
@@ -185,12 +218,45 @@ class SinksManager:
                    events=len(events),
                    total_written=total_written,
                    total_errors=total_errors,
-                   sink_results=results)
+                   sink_results=results,
+                   batch_key=batch_key[:8])
         
         return results
     
+    async def _reliable_write(self, name: str, sink: StorageSink, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Write to a sink with circuit breaker and retry logic."""
+        circuit_breaker = self.circuit_breakers[name]
+        retry_manager = self.retry_managers[name]
+        
+        async def write_operation():
+            try:
+                # Observe per-sink write latency
+                with mship_sink_write_seconds.labels(sink=name).time():
+                    result = await sink.write_events(events)
+                
+                # Record success in circuit breaker
+                circuit_breaker.record_success()
+                return result
+                
+            except asyncio.TimeoutError:
+                # Record timeout in circuit breaker
+                circuit_breaker.record_timeout()
+                raise
+            except Exception as e:
+                # Record failure in circuit breaker
+                circuit_breaker.record_failure()
+                raise
+        
+        try:
+            # Execute with retry logic
+            return await retry_manager.execute_with_retry(write_operation)
+            
+        except Exception as e:
+            logger.error("Sink write failed after retries", sink=name, error=str(e))
+            return {"written": 0, "errors": len(events)}
+    
     async def _safe_write(self, name: str, sink: StorageSink, events: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Safely write to a sink with error handling and metrics observation."""
+        """Legacy safe write method - kept for compatibility."""
         try:
             # Observe per-sink write latency as required
             with mship_sink_write_seconds.labels(sink=name).time():
@@ -200,23 +266,30 @@ class SinksManager:
             return {"written": 0, "errors": len(events)}
     
     def get_health_status(self) -> Dict[str, Any]:
-        """Get health status of all sinks."""
+        """Get health status of all sinks including circuit breaker states."""
         sink_health = {}
         overall_healthy = True
         
         for name, sink in self.sinks.items():
             is_healthy = sink.is_healthy()
+            circuit_breaker = self.circuit_breakers[name]
+            circuit_info = circuit_breaker.get_state_info()
+            
             sink_health[name] = {
                 "healthy": is_healthy,
-                "enabled": True
+                "enabled": True,
+                "circuit_breaker": circuit_info
             }
-            if not is_healthy:
+            
+            # Consider sink unhealthy if circuit is open
+            if not is_healthy or circuit_info['state'] == 'OPEN':
                 overall_healthy = False
         
         return {
             "healthy": overall_healthy,
             "sinks": sink_health,
-            "enabled_sinks": list(self.sinks.keys())
+            "enabled_sinks": list(self.sinks.keys()),
+            "idempotency": self.idempotency_manager.get_stats()
         }
     
     def get_stats(self) -> Dict[str, Any]:
