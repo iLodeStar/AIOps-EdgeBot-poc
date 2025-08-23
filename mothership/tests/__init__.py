@@ -1,1 +1,1 @@
-"""Tests for mothership functionality."""
+"""Tests for mothership functionality with dual-sink support."""

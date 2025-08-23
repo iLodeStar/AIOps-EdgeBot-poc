@@ -1,9 +1,24 @@
+# Core FastAPI and server dependencies
 fastapi>=0.104.0
-uvicorn>=0.24.0
-psycopg[binary,pool]>=3.1.0
+uvicorn[standard]>=0.24.0
 pydantic>=2.5.0
-prometheus-client>=0.17.0
 structlog>=23.0.0
-pyyaml>=6.0
+
+# Database drivers
+psycopg[binary,pool]>=3.1.0  # Main branch PostgreSQL driver
+asyncpg>=0.29.0              # Alternative async PostgreSQL driver
+sqlalchemy[asyncio]>=2.0.0   # ORM support
+
+# HTTP clients and utilities  
 httpx>=0.24.0
 aiofiles>=23.0.0
+
+# Configuration and monitoring
+pydantic-settings>=2.1.0
+pyyaml>=6.0
+prometheus-client>=0.17.0
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.12.0

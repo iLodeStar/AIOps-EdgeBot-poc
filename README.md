@@ -22,6 +22,7 @@ Documentation
 - docs/ARCHITECTURE.md — Design and architecture overview
 - docs/DECISIONS.md — Framework and design decisions
 - docs/USER_GUIDE.md — Using EdgeBot (receiving data, inspecting outputs)
+- docs/LOKI_GRAFANA_SETUP.md — Configure Loki log aggregation with Grafana visualization
 
 Need help?
 - Open an issue in this repository with details of your environment and what you tried.
@@ -72,6 +73,17 @@ edge_node/                 # Main EdgeBot implementation
 ├── Dockerfile          # Container build
 ├── docker-compose.yaml # Easy deployment
 └── README.md           # Detailed documentation
+
+mothership/               # Data collection server
+├── app/                 # Server application code  
+│   ├── config.py       # Configuration with dual-sink support
+│   ├── server.py       # FastAPI server with /ingest endpoint
+│   └── storage/        # Storage backends
+│       ├── loki.py     # Loki client with safe labeling
+│       └── sinks.py    # Multi-sink manager (TSDB + Loki)
+├── tests/              # Comprehensive test suite
+├── requirements.txt    # Server dependencies
+└── README.md          # Server documentation
 ```
 
 ## Key Features
@@ -121,6 +133,32 @@ Send test syslog messages:
 ```bash
 python send_test_syslog.py
 ```
+
+## Mothership (Data Collection Server)
+
+The mothership receives and stores data from EdgeBot nodes with dual-sink capability:
+
+### Quick Start
+
+```bash
+# Start with TimescaleDB only (default)
+cd mothership
+pip install -r requirements.txt
+python -m app.server
+
+# Start with Loki + Grafana for log analysis
+docker-compose -f compose.observability.yml up -d
+export LOKI_ENABLED=true
+export LOKI_URL=http://localhost:3100
+python -m app.server
+```
+
+### Storage Options
+
+- **TimescaleDB** (default): Structured data storage for analytics and SQL queries
+- **Loki** (optional): Log aggregation and search with Grafana integration
+
+Both sinks can be enabled simultaneously for comprehensive data storage. See `docs/LOKI_GRAFANA_SETUP.md` for detailed configuration.
 
 ## Next Phases
 

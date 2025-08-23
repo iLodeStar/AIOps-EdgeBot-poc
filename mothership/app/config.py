@@ -1,4 +1,4 @@
-"""Configuration management for Mothership."""
+"""Configuration management for Mothership with dual-sink support."""
 import os
 import signal
 import logging
@@ -10,7 +10,7 @@ import structlog
 logger = structlog.get_logger()
 
 class ConfigManager:
-    """Manages configuration loading and hot-reloading."""
+    """Manages configuration loading and hot-reloading with dual-sink support."""
     
     def __init__(self, config_path: str = "config.yaml"):
         self.config_path = Path(config_path)
@@ -52,7 +52,9 @@ class ConfigManager:
             # Validate configuration
             self._validate_config()
             
-            logger.info("Configuration loaded successfully", config_file=str(self.config_path))
+            logger.info("Configuration loaded successfully", 
+                       config_file=str(self.config_path),
+                       enabled_sinks=self.get_enabled_sinks())
             return self._config
             
         except Exception as e:
@@ -93,6 +95,26 @@ class ConfigManager:
         if os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'):
             self._config.setdefault('llm', {})['confidence_threshold'] = float(os.getenv('MOTHERSHIP_LLM_CONFIDENCE_THRESHOLD'))
         
+        # Loki sink configuration - NEW
+        if os.getenv('LOKI_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['enabled'] = os.getenv('LOKI_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('LOKI_URL'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['url'] = os.getenv('LOKI_URL')
+        if os.getenv('LOKI_TENANT_ID'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['tenant_id'] = os.getenv('LOKI_TENANT_ID')
+        if os.getenv('LOKI_USERNAME'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['username'] = os.getenv('LOKI_USERNAME')
+        if os.getenv('LOKI_PASSWORD'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['password'] = os.getenv('LOKI_PASSWORD')
+        if os.getenv('LOKI_BATCH_SIZE'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_size'] = int(os.getenv('LOKI_BATCH_SIZE'))
+        if os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'):
+            self._config.setdefault('sinks', {}).setdefault('loki', {})['batch_timeout_seconds'] = float(os.getenv('LOKI_BATCH_TIMEOUT_SECONDS'))
+        
+        # TimescaleDB sink configuration - NEW
+        if os.getenv('TSDB_ENABLED'):
+            self._config.setdefault('sinks', {}).setdefault('timescaledb', {})['enabled'] = os.getenv('TSDB_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        
         # Logging
         if os.getenv('MOTHERSHIP_LOG_LEVEL'):
             self._config.setdefault('logging', {})['level'] = os.getenv('MOTHERSHIP_LOG_LEVEL')
@@ -114,9 +136,16 @@ class ConfigManager:
         database = self._config['database']
         if 'dsn' not in database and not all(key in database for key in ['host', 'port', 'database', 'user']):
             raise ValueError("Database section must contain 'dsn' or connection parameters (host, port, database, user)")
+        
+        # Validate sinks configuration
+        sinks = self._config.get('sinks', {})
+        if sinks.get('loki', {}).get('enabled', False):
+            loki_config = sinks['loki']
+            if 'url' not in loki_config:
+                raise ValueError("Loki sink is enabled but 'url' is not configured")
     
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get default configuration."""
+        """Get default configuration with dual-sink support."""
         return {
             'server': {
                 'host': '0.0.0.0',
@@ -163,6 +192,23 @@ class ConfigManager:
                 'max_tokens': 150,
                 'temperature': 0.0
             },
+            'sinks': {
+                'timescaledb': {
+                    'enabled': True  # Default enabled
+                },
+                'loki': {
+                    'enabled': False,  # Default disabled
+                    'url': 'http://localhost:3100',
+                    'tenant_id': None,
+                    'username': None,
+                    'password': None,
+                    'batch_size': 100,
+                    'batch_timeout_seconds': 5.0,
+                    'max_retries': 3,
+                    'retry_backoff_seconds': 1.0,
+                    'timeout_seconds': 30.0
+                }
+            },
             'logging': {
                 'level': 'INFO',
                 'structured': True
@@ -172,3 +218,15 @@ class ConfigManager:
     def get_config(self) -> Dict[str, Any]:
         """Get current configuration."""
         return self._config.copy()
+    
+    def get_enabled_sinks(self) -> list:
+        """Get list of enabled sink names."""
+        enabled = []
+        sinks = self._config.get('sinks', {})
+        
+        if sinks.get('timescaledb', {}).get('enabled', True):
+            enabled.append('timescaledb')
+        if sinks.get('loki', {}).get('enabled', False):
+            enabled.append('loki')
+            
+        return enabled
