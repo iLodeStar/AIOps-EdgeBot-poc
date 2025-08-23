@@ -1,0 +1,72 @@
+# Development values for EdgeBot
+# Minimal resources and quick iteration
+
+profiles:
+  development:
+    enabled: true
+
+mothership:
+  replicaCount: 1
+  image:
+    repository: edgebot/mothership
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  config:
+    logging:
+      level: "DEBUG"
+    database:
+      enabled: true
+    loki:
+      enabled: true
+    llm:
+      enabled: false  # Disable LLM in dev to save resources
+
+observability:
+  enabled: true
+  prometheus-stack:
+    prometheus:
+      prometheusSpec:
+        retention: 7d
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              resources:
+                requests:
+                  storage: 10Gi
+    grafana:
+      adminPassword: "admin"
+      persistence:
+        enabled: true
+        size: 1Gi
+    alertmanager:
+      alertmanagerSpec:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+
+timescaledb:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 500m

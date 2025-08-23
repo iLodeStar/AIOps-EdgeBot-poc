@@ -1,0 +1,201 @@
+# Maritime Shore Configuration
+# Central shore-based processing with high availability
+
+mothership:
+  replicaCount: 5  # High availability for central processing
+  image:
+    repository: your-registry.com/edgebot/mothership
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 2000m
+      memory: 4Gi
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 5
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3
+  
+  config:
+    logging:
+      level: "INFO"
+    database:
+      enabled: true
+    loki:
+      enabled: true
+      batchSize: 10000  # High throughput processing
+      batchTimeoutSeconds: 5   # Fast processing for shore
+    llm:
+      enabled: true  # Full AI capabilities on shore
+      apiKey: ""  # Set via external secret management
+  
+  # Node affinity for shore infrastructure
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: topology.kubernetes.io/zone
+            operator: In
+            values: ["shore-datacenter"]
+          - key: node-role.kubernetes.io/compute
+            operator: Exists
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [mothership]
+            topologyKey: kubernetes.io/hostname
+
+observability:
+  enabled: true
+  prometheus-stack:
+    prometheus:
+      prometheusSpec:
+        replicas: 3  # HA for central monitoring
+        retention: 180d  # Long-term data retention for analysis
+        retentionSize: 1TiB
+        resources:
+          requests:
+            cpu: 3000m
+            memory: 12Gi
+          limits:
+            cpu: 6000m
+            memory: 24Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: "fast-ssd"
+              resources:
+                requests:
+                  storage: 1Ti
+    
+    grafana:
+      replicas: 2
+      adminPassword: ""  # Use external secret
+      persistence:
+        enabled: true
+        size: 50Gi
+        storageClassName: "standard"
+      resources:
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+      # Configure for multi-ship monitoring
+      additionalDataSources:
+        - name: Ship-Alpha-Prometheus
+          type: prometheus
+          url: http://ship-alpha-prometheus:9090
+          access: proxy
+        - name: Ship-Beta-Prometheus
+          type: prometheus  
+          url: http://ship-beta-prometheus:9090
+          access: proxy
+    
+    alertmanager:
+      alertmanagerSpec:
+        replicas: 3
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        config:
+          global:
+            smtp_smarthost: 'smtp.maritime-company.com:587'
+            smtp_from: 'shore-ops@maritime-company.com'
+          route:
+            group_by: ['alertname', 'ship', 'severity']
+            group_wait: 5s
+            group_interval: 5s
+            repeat_interval: 4h
+            receiver: 'shore-ops'
+            routes:
+            - match:
+                severity: critical
+              receiver: 'critical-shore-ops'
+              group_wait: 0s
+            - match:
+                ship: 'ship-alpha'
+              receiver: 'ship-alpha-ops'
+            - match:
+                ship: 'ship-beta'
+              receiver: 'ship-beta-ops'
+          receivers:
+          - name: 'shore-ops'
+            email_configs:
+            - to: 'shore-ops@maritime-company.com'
+              subject: 'Shore Operations Alert: {{ .GroupLabels.alertname }}'
+          - name: 'critical-shore-ops'
+            email_configs:
+            - to: 'shore-critical@maritime-company.com,duty-manager@maritime-company.com'
+              subject: 'CRITICAL Shore Alert: {{ .GroupLabels.alertname }}'
+            slack_configs:
+            - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+              channel: '#shore-critical-alerts'
+              title: 'Critical Shore Alert'
+          - name: 'ship-alpha-ops'
+            email_configs:
+            - to: 'ship-alpha-ops@maritime-company.com'
+              subject: 'Ship Alpha Alert: {{ .GroupLabels.alertname }}'
+          - name: 'ship-beta-ops'
+            email_configs:
+            - to: 'ship-beta-ops@maritime-company.com'
+              subject: 'Ship Beta Alert: {{ .GroupLabels.alertname }}'
+
+timescaledb:
+  enabled: true
+  replicas: 3  # HA database cluster
+  persistence:
+    enabled: true
+    size: 2Ti  # Large storage for central data lake
+    storageClassName: "fast-ssd"
+  resources:
+    requests:
+      memory: 16Gi
+      cpu: 8000m
+    limits:
+      memory: 32Gi
+      cpu: 16000m
+  
+  # Shore-specific database configuration
+  connection:
+    database: "mothership_shore_central"
+  
+  # Multi-zone deployment for shore HA
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [timescaledb]
+          topologyKey: topology.kubernetes.io/zone
+  
+  # Backup configuration for shore central data
+  backup:
+    enabled: true
+    schedule: "0 */6 * * *"  # Every 6 hours
+    retention: "90d"
+    storage:
+      provider: "s3"
+      bucket: "maritime-edgebot-backups"
+      region: "us-east-1"

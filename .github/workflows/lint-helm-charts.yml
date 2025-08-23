@@ -1,0 +1,109 @@
+name: Lint Helm Charts
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'charts/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'charts/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.1'
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          check-latest: true
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.6.1
+
+      - name: Run chart-testing (list-changed)
+        id: list-changed
+        run: |
+          changed=$(ct list-changed --target-branch ${{ github.event.repository.default_branch }})
+          if [[ -n "$changed" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run chart-testing (lint)
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct lint --target-branch ${{ github.event.repository.default_branch }} --config .github/ct.yaml
+
+      - name: Install kubeconform
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin
+
+      - name: Validate Kubernetes manifests with kubeconform
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          for chart in charts/*/; do
+            if [[ -f "$chart/Chart.yaml" ]]; then
+              echo "Validating $chart"
+              # Add dependencies for umbrella chart
+              if [[ "$chart" == *"umbrella"* ]]; then
+                helm dependency update "$chart" || true
+              fi
+              # Template the chart and validate
+              helm template test-release "$chart" | kubeconform -strict -summary -verbose
+            fi
+          done
+
+  # Optional: smoke test with kind
+  smoke-test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.1'
+
+      - name: Set up kind
+        uses: helm/kind-action@v1.4.0
+        with:
+          cluster_name: helm-test
+          kubectl_version: v1.27.0
+
+      - name: Install Prometheus Operator CRDs
+        run: |
+          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.68.0/example/prometheus-operator-crd/monitoring.coreos.com_alertmanagers.yaml
+          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.68.0/example/prometheus-operator-crd/monitoring.coreos.com_prometheuses.yaml
+          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.68.0/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml
+          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.68.0/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml
+          kubectl apply --server-side -f https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.68.0/example/prometheus-operator-crd/monitoring.coreos.com_podmonitors.yaml
+
+      - name: Test mothership chart
+        run: |
+          helm install test-mothership ./charts/mothership \
+            --set image.repository=nginx \
+            --set image.tag=alpine \
+            --set config.database.enabled=false \
+            --set config.loki.enabled=false \
+            --dry-run --debug
+
+      - name: Test observability chart (template only - no deployment due to complexity)
+        run: |
+          helm template test-observability ./charts/observability \
+            --set prometheus-stack.prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=1Gi \
+            --set prometheus-stack.grafana.persistence.size=1Gi

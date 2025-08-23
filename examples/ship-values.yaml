@@ -1,0 +1,124 @@
+# Maritime Ship Configuration
+# Optimized for at-sea deployment with intermittent connectivity
+
+mothership:
+  replicaCount: 2  # Redundancy without overprovisioning
+  image:
+    repository: edgebot/mothership
+    tag: "1.5.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  config:
+    logging:
+      level: "INFO"
+    database:
+      enabled: true
+    loki:
+      enabled: true
+      batchSize: 5000  # Larger batches for efficiency
+      batchTimeoutSeconds: 30  # Longer timeout for batch accumulation
+    llm:
+      enabled: false  # Disable LLM to conserve resources at sea
+  
+  # Persistent storage for offline queueing
+  persistence:
+    enabled: true
+    size: 100Gi
+    storageClassName: "local-storage"
+  
+  # Node affinity for ship nodes
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: topology.kubernetes.io/zone
+            operator: In
+            values: ["ship"]
+          - key: node-role.kubernetes.io/edge
+            operator: Exists
+
+observability:
+  enabled: true
+  prometheus-stack:
+    prometheus:
+      prometheusSpec:
+        retention: 30d  # Retain data for sync windows
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: "local-storage"
+              resources:
+                requests:
+                  storage: 50Gi
+    
+    grafana:
+      adminPassword: "admin"
+      persistence:
+        enabled: true
+        size: 5Gi
+        storageClassName: "local-storage"
+      resources:
+        requests:
+          cpu: 200m
+          memory: 400Mi
+    
+    alertmanager:
+      alertmanagerSpec:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        # Minimal alerting config for ship - alerts stored for later sync
+        config:
+          global:
+            resolve_timeout: 5m
+          route:
+            group_by: ['alertname']
+            group_wait: 30s
+            group_interval: 5m
+            repeat_interval: 12h
+            receiver: 'local-log'
+          receivers:
+          - name: 'local-log'
+            # Log alerts locally for later processing
+
+timescaledb:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 200Gi
+    storageClassName: "local-storage"  # Local SSDs for ship deployment
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 1000m
+    limits:
+      memory: 4Gi
+      cpu: 2000m
+  
+  # Ship-specific database configuration
+  connection:
+    database: "mothership_ship"
+  
+  # Node affinity for ship storage
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: topology.kubernetes.io/zone
+            operator: In
+            values: ["ship"]

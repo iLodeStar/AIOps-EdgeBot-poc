@@ -1,0 +1,87 @@
+EdgeBot has been installed successfully!
+
+{{- if .Values.mothership.enabled }}
+
+✅ Mothership Service:
+   - Namespace: {{ .Release.Namespace }}
+   - Service: {{ include "edgebot-umbrella.fullname" . }}-mothership:8080
+   - Health Check: http://{{ include "edgebot-umbrella.fullname" . }}-mothership:8080/healthz
+   - Metrics: http://{{ include "edgebot-umbrella.fullname" . }}-mothership:8080/metrics
+
+{{- if .Values.observability.enabled }}
+
+✅ Observability Stack:
+   - Prometheus: {{ include "edgebot-umbrella.fullname" . }}-observability-prometheus:9090
+   - Grafana: {{ include "edgebot-umbrella.fullname" . }}-observability-grafana:80
+   - Alertmanager: {{ include "edgebot-umbrella.fullname" . }}-observability-alertmanager:9093
+   - Loki: {{ include "edgebot-umbrella.fullname" . }}-observability-loki:3100
+
+📊 SLO Dashboard: Available in Grafana (EdgeBot - SLO Dashboard)
+
+{{- end }}
+
+{{- if .Values.timescaledb.enabled }}
+
+✅ TimescaleDB:
+   - Service: {{ include "edgebot-umbrella.fullname" . }}-timescaledb:5432
+   - Database: {{ .Values.timescaledb.connection.database }}
+   - User: {{ .Values.timescaledb.connection.user.name }}
+
+{{- end }}
+{{- end }}
+
+🚀 Quick Access Commands:
+
+{{- if .Values.observability.enabled }}
+# Access Grafana dashboard
+kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "edgebot-umbrella.fullname" . }}-observability-grafana 3000:80
+# Then visit: http://localhost:3000 (admin/admin)
+{{- end }}
+
+{{- if .Values.mothership.enabled }}
+# Access Mothership API
+kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "edgebot-umbrella.fullname" . }}-mothership 8080:8080
+# Health check: curl http://localhost:8080/healthz
+{{- end }}
+
+# View all resources
+kubectl get all -l app.kubernetes.io/part-of=edgebot -n {{ .Release.Namespace }}
+
+# Check pod status
+kubectl get pods -n {{ .Release.Namespace }}
+
+# View logs
+kubectl logs -l app.kubernetes.io/name=mothership -n {{ .Release.Namespace }} --tail=100
+
+{{- if .Values.profiles.development.enabled }}
+
+🔧 Development Mode Active:
+   - Debug logging enabled
+   - Minimal resource allocations
+   - Short data retention periods
+
+{{- end }}
+
+{{- if .Values.profiles.production.enabled }}
+
+🏭 Production Mode Active:
+   - High availability configuration
+   - Extended data retention
+   - Enhanced security settings
+   - Auto-scaling enabled
+
+⚠️  Don't forget to:
+   - Configure alerting receivers (email/Slack)
+   - Set up backup strategies
+   - Review resource limits for your workload
+
+{{- end }}
+
+📚 Documentation:
+   - Deployment Guide: docs/DEPLOY_K8S.md
+   - Observability Guide: docs/OBSERVABILITY.md
+   - Troubleshooting: kubectl describe pod <pod-name> -n {{ .Release.Namespace }}
+
+🛟 Support:
+   - GitHub Issues: https://github.com/iLodeStar/AIOps-EdgeBot-poc/issues
+   - Health Checks: All services expose /healthz endpoints

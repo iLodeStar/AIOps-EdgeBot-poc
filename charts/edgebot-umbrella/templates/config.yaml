@@ -1,0 +1,9 @@
+{{/*
+This template applies profile configurations and is not rendered as a Kubernetes resource.
+It's used by Helm for subchart value overrides.
+*/}}
+
+{{- $_ := include "edgebot-umbrella.applyDevelopmentProfile" . }}
+{{- $_ := include "edgebot-umbrella.applyProductionProfile" . }}
+
+{{/* Configuration template completed - no output */}}
