@@ -59,6 +59,17 @@ services:
       - '--config.file=/etc/alertmanager/config.yml'
       - '--storage.path=/alertmanager'
       - '--web.external-url=http://localhost:9093'
+    env_file:
+      - .env
+    environment:
+      # Email notification settings (loaded from .env file)
+      - ALERT_SMTP_HOST=${ALERT_SMTP_HOST:-}
+      - ALERT_SMTP_PORT=${ALERT_SMTP_PORT:-587}
+      - ALERT_SMTP_USER=${ALERT_SMTP_USER:-}
+      - ALERT_SMTP_PASS=${ALERT_SMTP_PASS:-}
+      - ALERT_SMTP_STARTTLS=${ALERT_SMTP_STARTTLS:-true}
+      - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM:-}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO:-}
     networks:
       - observability
     restart: unless-stopped
