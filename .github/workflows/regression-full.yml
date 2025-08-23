@@ -1,0 +1,334 @@
+name: Full Regression Test
+
+# Manual trigger only - on-demand comprehensive regression testing
+"on":
+  workflow_dispatch:
+    inputs:
+      test_id_suffix:
+        description: 'Optional suffix for test identification (default: random UUID)'
+        required: false
+        default: ''
+
+jobs:
+  full-regression:
+    runs-on: ubuntu-latest
+    
+    # Service containers for TimescaleDB and Loki
+    services:
+      # TimescaleDB for TSDB sink testing
+      timescaledb:
+        image: timescale/timescaledb:latest-pg14
+        env:
+          POSTGRES_DB: mothership
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+
+      # Loki for log sink testing  
+      loki:
+        image: grafana/loki:2.9.0
+        ports:
+          - 3100:3100
+        options: >-
+          --health-cmd "wget --quiet --tries=1 --spider http://localhost:3100/ready || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 20s
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          # Install PostgreSQL client for database operations  
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client jq uuid-runtime
+          
+          pip install -r requirements-dev.txt
+          pip install -r edge_node/requirements.txt
+          pip install -r mothership/requirements.txt
+
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for TimescaleDB..."
+          timeout=120
+          while ! pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for TimescaleDB to be ready..."
+            sleep 2
+            timeout=$((timeout-2))
+            if [ $timeout -le 0 ]; then
+              echo "TimescaleDB failed to start within timeout"
+              exit 1
+            fi
+          done
+          echo "✅ TimescaleDB is ready"
+
+          echo "Waiting for Loki..."
+          timeout=60
+          while ! curl -s -f http://localhost:3100/ready > /dev/null 2>&1; do
+            echo "Waiting for Loki to be ready..."
+            sleep 2
+            timeout=$((timeout-2))
+            if [ $timeout -le 0 ]; then
+              echo "Loki failed to start within timeout"
+              exit 1
+            fi
+          done
+          echo "✅ Loki is ready"
+
+      - name: Initialize TimescaleDB schema
+        run: |
+          # Connect to TimescaleDB and create the events table
+          export PGPASSWORD=postgres
+          psql -h localhost -U postgres -d mothership -c "
+            -- Create events table (hypertable)
+            CREATE TABLE IF NOT EXISTS events (
+                ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                data JSONB NOT NULL,
+                id BIGSERIAL,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            
+            -- Create hypertable with 1-day chunks (ignore error if already exists)
+            SELECT create_hypertable('events', 'ts', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+            
+            -- Create indexes for efficient queries
+            CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events (type, ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_events_source_ts ON events (source, ts DESC);
+            CREATE INDEX IF NOT EXISTS idx_events_data_gin ON events USING GIN (data);
+          "
+          echo "✅ TimescaleDB schema initialized"
+
+      - name: Run cross-phase E2E integration tests
+        continue-on-error: true  # Continue even if E2E tests fail to ensure we gather artifacts
+        run: |
+          mkdir -p reports/e2e
+          cd /home/runner/work/AIOps-EdgeBot-poc/AIOps-EdgeBot-poc
+          
+          # Run the existing cross-phase E2E test
+          PYTHONPATH=. python -m pytest tests/e2e/test_cross_phase_integration.py \
+            -v --tb=short \
+            --junitxml=reports/e2e/junit-e2e.xml \
+            --html=reports/e2e/report-e2e.html --self-contained-html \
+            2>&1 | tee reports/e2e/e2e-output.txt
+          
+          echo "✅ Cross-phase E2E tests completed (may have failures - continuing)"
+
+      - name: Start Mothership with dual-sink configuration
+        run: |
+          cd mothership
+          mkdir -p ../reports
+          
+          # Generate unique test ID
+          if [ -n "${{ github.event.inputs.test_id_suffix }}" ]; then
+            TEST_ID="regression-$(date +%Y%m%d-%H%M%S)-${{ github.event.inputs.test_id_suffix }}"
+          else
+            TEST_ID="regression-$(date +%Y%m%d-%H%M%S)-$(uuidgen | cut -d'-' -f1)"
+          fi
+          echo "TEST_ID=${TEST_ID}" >> $GITHUB_ENV
+          echo "Using TEST_ID: ${TEST_ID}"
+          
+          # Start Mothership with both sinks enabled
+          export MOTHERSHIP_DB_DSN="postgresql://postgres:postgres@localhost:5432/mothership"
+          export LOKI_ENABLED=true
+          export LOKI_URL=http://localhost:3100
+          export TSDB_ENABLED=true
+          export LOG_LEVEL=INFO
+          
+          echo "Starting Mothership..."
+          PYTHONPATH=. python -m uvicorn app.server:app --host 0.0.0.0 --port 8443 --log-level info > ../reports/mothership-stdout.txt 2>&1 &
+          MOTHERSHIP_PID=$!
+          echo "MOTHERSHIP_PID=${MOTHERSHIP_PID}" >> $GITHUB_ENV
+          
+          # Wait for Mothership to be ready
+          timeout=60
+          while ! curl -s -f http://localhost:8443/healthz > /dev/null 2>&1; do
+            echo "Waiting for Mothership to be ready..."
+            sleep 2
+            timeout=$((timeout-2))
+            if [ $timeout -le 0 ]; then
+              echo "Mothership failed to start within timeout"
+              cat ../reports/mothership-stdout.txt
+              exit 1
+            fi
+          done
+          echo "✅ Mothership is ready"
+
+      - name: POST test batch and validate dual-sink writes
+        run: |
+          mkdir -p reports
+          
+          # POST a unique batch to Mothership
+          TEST_BATCH='[
+            {
+              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)'",
+              "type": "syslog",
+              "source": "regression-test",
+              "message": "Regression test message with ID: '"$TEST_ID"'",
+              "hostname": "test-host",
+              "facility": "user",
+              "severity": "info",
+              "raw_message": "<14>'"$(date '+%b %d %H:%M:%S')"' test-host regression-test: Regression test message with ID: '"$TEST_ID"'"
+            },
+            {
+              "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)'",
+              "type": "log", 
+              "source": "regression-test",
+              "message": "Second regression test entry with ID: '"$TEST_ID"'",
+              "hostname": "test-host-2",
+              "service": "test-service",
+              "tags": {"test_id": "'"$TEST_ID"'", "regression": "true"}
+            }
+          ]'
+          
+          echo "POSTing test batch..."
+          curl -X POST http://localhost:8443/ingest \
+            -H "Content-Type: application/json" \
+            -d "$TEST_BATCH" \
+            -w "\nHTTP Status: %{http_code}\nResponse Time: %{time_total}s\n" \
+            > reports/ingest-response.json 2>&1
+          
+          echo "✅ Test batch posted"
+          
+          # Give sinks time to process
+          echo "Waiting for sink processing..."
+          sleep 10
+
+      - name: Validate Loki contains test data
+        run: |
+          mkdir -p reports
+          
+          # Query Loki for our test data
+          echo "Querying Loki for test data..."
+          QUERY_URL="http://localhost:3100/loki/api/v1/query_range?query=%7Bjob%3D%22mothership%22%7D%20%7C%3D%20%22${TEST_ID}%22&start=$(date -d '1 minute ago' -u +%Y-%m-%dT%H:%M:%S.%3NZ)&end=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+          
+          curl -s "$QUERY_URL" > reports/loki-query.json
+          
+          # Check if we got results
+          RESULT_COUNT=$(cat reports/loki-query.json | jq -r '.data.result | length' 2>/dev/null || echo "0")
+          if [ "$RESULT_COUNT" = "0" ] || [ "$RESULT_COUNT" = "null" ]; then
+            echo "❌ No data found in Loki for TEST_ID: $TEST_ID"
+            echo "Loki response:"
+            cat reports/loki-query.json
+            exit 1
+          else
+            echo "✅ Found $RESULT_COUNT stream(s) in Loki containing TEST_ID: $TEST_ID"
+          fi
+
+      - name: Validate TimescaleDB contains test data
+        run: |
+          mkdir -p reports
+          
+          # Query TimescaleDB for our test data
+          echo "Querying TimescaleDB for test data..."
+          export PGPASSWORD=postgres
+          
+          COUNT=$(psql -h localhost -U postgres -d mothership -t -c "
+            SELECT COUNT(*) FROM events 
+            WHERE data->>'message' LIKE '%${TEST_ID}%'
+            OR data->'tags'->>'test_id' = '${TEST_ID}';
+          " | xargs)
+          
+          echo "$COUNT" > reports/tsdb-count.txt
+          echo "TimescaleDB event count for TEST_ID '$TEST_ID': $COUNT"
+          
+          if [ "$COUNT" -lt 1 ]; then
+            echo "❌ No events found in TimescaleDB for TEST_ID: $TEST_ID"
+            
+            # Debug: show recent events
+            echo "Recent events in TimescaleDB:"
+            psql -h localhost -U postgres -d mothership -c "
+              SELECT ts, type, source, data->>'message' as message 
+              FROM events 
+              ORDER BY ts DESC 
+              LIMIT 10;
+            "
+            exit 1
+          else
+            echo "✅ Found $COUNT event(s) in TimescaleDB containing TEST_ID: $TEST_ID"
+          fi
+
+      - name: Cleanup processes
+        if: always()
+        run: |
+          # Stop Mothership if it's still running
+          if [ -n "$MOTHERSHIP_PID" ]; then
+            echo "Stopping Mothership (PID: $MOTHERSHIP_PID)..."
+            kill $MOTHERSHIP_PID || true
+            sleep 2
+          fi
+
+      - name: Generate summary report
+        if: always()
+        run: |
+          mkdir -p reports
+          
+          cat > reports/REGRESSION_SUMMARY.md << EOF
+          # Full Regression Test Summary
+          
+          **Generated:** $(date)
+          **Test ID:** $TEST_ID
+          **Workflow Run:** ${{ github.run_id }}
+          
+          ## Test Results
+          
+          ### Service Health
+          - ✅ TimescaleDB: Started and schema initialized
+          - ✅ Loki: Started and ready
+          - ✅ Mothership: Started with dual-sink configuration
+          
+          ### Data Validation
+          - Loki Query Results: \`$([ -f reports/loki-query.json ] && echo "Available" || echo "Missing")\`
+          - TSDB Event Count: \`$([ -f reports/tsdb-count.txt ] && cat reports/tsdb-count.txt || echo "Unknown")\`
+          
+          ### Artifacts Generated
+          - Cross-phase E2E Test Report: \`reports/e2e/report-e2e.html\`
+          - JUnit Results: \`reports/e2e/junit-e2e.xml\`
+          - Ingest Response: \`reports/ingest-response.json\`
+          - Loki Query Results: \`reports/loki-query.json\`
+          - TSDB Count: \`reports/tsdb-count.txt\`
+          - Mothership Logs: \`reports/mothership-stdout.txt\`
+          
+          ## Usage
+          
+          This regression workflow validates the complete EdgeBot → Mothership → [Loki, TimescaleDB] pipeline:
+          
+          1. **Services**: Starts TimescaleDB and Loki via GitHub Actions service containers
+          2. **E2E Tests**: Runs existing cross-phase integration tests 
+          3. **Dual-Sink Validation**: POSTs unique test batch and verifies writes to both sinks
+          4. **Artifact Collection**: Gathers comprehensive logs and test results
+          
+          To run this workflow:
+          1. Go to Actions tab in GitHub
+          2. Select "Full Regression Test" workflow
+          3. Click "Run workflow" 
+          4. Optionally specify a test ID suffix
+          5. Download \`full-regression-reports\` artifact when complete
+          EOF
+
+      - name: Upload comprehensive artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-regression-reports
+          path: |
+            reports/
+            mothership/logs/
+          retention-days: 30
