@@ -97,6 +97,7 @@ class LokiSink:
         return self.config.get('enabled', False)
 
 
+
 class SinksManager:
     """Manages writes to multiple storage sinks with reliability features."""
     
@@ -131,6 +132,9 @@ class SinksManager:
         if start_tasks:
             await asyncio.gather(*start_tasks, return_exceptions=True)
         
+        # Start background queue processing if enabled
+        # Note: Queue processing is handled by ResilientSink instances
+        
         logger.info("SinksManager started", 
                    enabled_sinks=list(self.sinks.keys()))
     
@@ -151,7 +155,7 @@ class SinksManager:
         if not events:
             return {}
         
-        # Fan out writes to all sinks concurrently
+        # Try direct writes first
         write_tasks = {}
         for name, sink in self.sinks.items():
             write_tasks[name] = asyncio.create_task(
@@ -160,9 +164,12 @@ class SinksManager:
         
         # Wait for all writes to complete
         results = {}
+        
         for name, task in write_tasks.items():
             try:
-                results[name] = await task
+                result = await task
+                results[name] = result
+                    
             except Exception as e:
                 logger.error("Sink write failed", sink=name, error=str(e))
                 results[name] = {"written": 0, "errors": len(events), "retries": 0, "queued": 0}
@@ -216,10 +223,12 @@ class SinksManager:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics from all sinks."""
-        return {
+        stats = {
             "enabled_sinks": list(self.sinks.keys()),
             "sink_count": len(self.sinks)
         }
+        
+        return stats
     
     def get_sink_names(self) -> List[str]:
         """Get names of all configured sinks."""

@@ -181,3 +181,40 @@ class TestMetricsRequirements:
         assert 'mship_sink_written_total{sink="timescaledb"}' in content
         assert 'mship_sink_write_seconds_count{sink="loki"}' in content
         assert 'mship_sink_write_seconds_count{sink="timescaledb"}' in content
+
+
+class TestReliabilityMetrics:
+    """Test reliability metrics functionality."""
+    
+    def test_reliability_metrics_exist(self):
+        """Test that all reliability metrics are available."""
+        from mothership.app.metrics import (
+            mship_sink_retry_total,
+            mship_sink_error_total,
+            mship_sink_timeout_total,
+            mship_sink_circuit_state,
+            mship_sink_circuit_open_total,
+            mship_queue_depth,
+            mship_queue_bytes
+        )
+        
+        # Test that metrics can be used
+        mship_sink_retry_total.labels(sink='test').inc()
+        mship_sink_error_total.labels(sink='test').inc()
+        mship_sink_timeout_total.labels(sink='test').inc()
+        mship_sink_circuit_state.labels(sink='test').set(1)
+        mship_sink_circuit_open_total.labels(sink='test').inc()
+        mship_queue_depth.set(10)
+        mship_queue_bytes.set(1024)
+        
+        from mothership.app.metrics import get_metrics_content
+        content = get_metrics_content()
+        
+        # Verify metrics are present
+        assert 'mship_sink_retry_total' in content
+        assert 'mship_sink_error_total' in content
+        assert 'mship_sink_timeout_total' in content
+        assert 'mship_sink_circuit_state' in content
+        assert 'mship_sink_circuit_open_total' in content
+        assert 'mship_queue_depth' in content
+        assert 'mship_queue_bytes' in content

@@ -77,7 +77,7 @@ mship_loki_queue_size = Gauge(
     registry=METRICS_REGISTRY
 )
 
-# Per-sink retry metrics
+# Reliability metrics for per-sink retries, circuit breakers, and persistent queue
 mship_sink_retry_total = Counter(
     'mship_sink_retry_total',
     'Total number of retry attempts per sink',
