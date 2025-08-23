@@ -28,10 +28,30 @@ output:
     batch_size: 100
     batch_timeout: 5
     compression: true
+    # Enhanced retry configuration (SATCOM-friendly defaults)
+    retry:
+      max_retries: 5
+      initial_backoff_ms: 500
+      max_backoff_ms: 30000
+      jitter_factor: 0.2
+      timeout_ms: 5000
     # To send to HTTPS, set:
     # url: "https://your-server/ingest"
     # auth_token: "your-token"
     # tls_verify: true
+
+# Optional persistent queue for high-reliability scenarios
+queue:
+  enabled: false  # Enable for store-and-forward capability
+  dir: "/var/lib/edgebot/queue"
+  max_bytes: 104857600  # 100MB
+  flush_interval_ms: 5000  # 5 seconds  
+  dlq_dir: "/var/lib/edgebot/dlq"
+  flush_bandwidth_bytes_per_sec: 1048576  # 1MB/s - adjust for satellite link
+
+# Idempotency prevents duplicate data on retry
+idempotency:
+  window_sec: 3600  # 1 hour deduplication window
 
 security:
   run_as_non_root: true

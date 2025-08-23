@@ -63,6 +63,8 @@ The pipeline ensures **PII safety** by running redaction processors BEFORE any L
 - **Timestamp Normalization**: Standardize timestamp formats
 
 ### 3. LLM Enhancement (Optional, Feature-Flagged OFF by default)
+- **Dual Backend Support**: OpenAI-compatible APIs or local Ollama inference
+- **Offline Capability**: Full offline enrichment with Ollama (no external network required)
 - **Guardrailed Processing**: Only redacted data sent to LLM
 - **Confidence Thresholding**: Only apply high-confidence results (≥0.8)
 - **Circuit Breaker**: Automatic fallback on failures
@@ -174,12 +176,18 @@ pipeline:
 
 llm:
   enabled: false  # Default OFF for safety
+  backend: "openai"  # "openai" or "ollama"
   endpoint: "https://api.openai.com/v1"
   model: "gpt-3.5-turbo"
   api_key: "${OPENAI_API_KEY}"
   confidence_threshold: 0.8
   max_tokens: 150
   temperature: 0.0
+  # Ollama-specific settings
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "llama3.1:8b-instruct-q4_0"
+  ollama_timeout_ms: 30000
+  ollama_max_tokens: 150
   circuit_breaker:
     enabled: true
     failure_threshold: 5
@@ -210,8 +218,15 @@ Key overrides:
 **Core Settings:**
 - `MOTHERSHIP_DB_DSN`: Database connection string
 - `MOTHERSHIP_LLM_ENABLED`: Enable/disable LLM (true/false)
-- `MOTHERSHIP_LLM_API_KEY`: OpenAI API key
+- `MOTHERSHIP_LLM_API_KEY`: OpenAI API key (only needed for OpenAI backend)
 - `MOTHERSHIP_LOG_LEVEL`: Logging level (DEBUG/INFO/WARNING/ERROR)
+
+**LLM Settings:**
+- `LLM_BACKEND`: LLM backend type (openai/ollama, default: openai)
+- `OLLAMA_BASE_URL`: Ollama server URL (default: http://localhost:11434)
+- `OLLAMA_MODEL`: Ollama model name (default: llama3.1:8b-instruct-q4_0)
+- `OLLAMA_TIMEOUT_MS`: Ollama request timeout in milliseconds (default: 30000)
+- `OLLAMA_MAX_TOKENS`: Maximum tokens for Ollama responses (default: 150)
 
 **Loki Sink Settings:**
 - `LOKI_ENABLED`: Enable Loki sink (true/false, default: false)
@@ -421,6 +436,12 @@ Structured JSON logging with:
 - **Memory**: 2GB+ (more for LLM processing)
 - **Storage**: Depends on ingestion rate, plan for time-series growth
 - **Network**: Async processing handles high ingestion rates efficiently
+
+## Related Documentation
+
+- **[Offline LLM Setup Guide](../docs/LLM_OFFLINE.md)**: Complete guide for setting up Ollama-based offline LLM enrichment
+- **[Observability Guide](../docs/OBSERVABILITY.md)**: Monitoring and alerting setup
+- **[Loki & Grafana Setup](../docs/LOKI_GRAFANA_SETUP.md)**: Log aggregation and visualization
 
 ## Development
 

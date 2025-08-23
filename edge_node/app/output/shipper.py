@@ -4,14 +4,17 @@ import json
 import gzip
 import time
 import os
+import hashlib
+import random
 import aiofiles
 from collections import deque
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from urllib.parse import urlparse
 import httpx
 import structlog
 from .spool import SQLiteSpool
+from .queue import PersistentQueue
 
 logger = structlog.get_logger(__name__)
 
@@ -160,21 +163,50 @@ class MessageBuffer:
 
 
 class RetryManager:
-    """Manages retry logic for failed requests."""
+    """Enhanced retry manager with jittered exponential backoff for SATCOM networks."""
     
-    def __init__(self, max_retries: int = 3, base_backoff: float = 1.0, max_backoff: float = 60.0):
+    def __init__(self, max_retries: int = 5, initial_backoff_ms: int = 500, 
+                 max_backoff_ms: int = 30000, jitter_factor: float = 0.2):
         self.max_retries = max_retries
-        self.base_backoff = base_backoff
-        self.max_backoff = max_backoff
+        self.initial_backoff_ms = initial_backoff_ms
+        self.max_backoff_ms = max_backoff_ms
+        self.jitter_factor = jitter_factor
         self._retry_batches = []  # List of (batch, attempt_count, next_retry_time)
     
-    def add_failed_batch(self, batch: List[Dict[str, Any]]):
-        """Add a failed batch for retry."""
-        next_retry_time = time.time() + self.base_backoff
+    def add_failed_batch(self, batch: List[Dict[str, Any]], response_headers: Optional[Dict[str, str]] = None):
+        """Add a failed batch for retry with optional Retry-After header support."""
+        # Check for Retry-After header
+        retry_delay = self._get_retry_after_delay(response_headers) if response_headers else None
+        
+        if retry_delay is None:
+            # Use initial backoff with jitter
+            base_backoff = self.initial_backoff_ms / 1000.0  # Convert to seconds
+            jitter_range = base_backoff * self.jitter_factor
+            jitter = random.uniform(-jitter_range, jitter_range) if self.jitter_factor > 0 else 0
+            retry_delay = max(0.1, base_backoff + jitter)
+        
+        next_retry_time = time.time() + retry_delay
         self._retry_batches.append((batch, 1, next_retry_time))
+        
+        logger.info("Batch scheduled for retry",
+                   messages=len(batch),
+                   retry_delay=retry_delay,
+                   next_retry_time=next_retry_time)
+    
+    def _get_retry_after_delay(self, headers: Dict[str, str]) -> Optional[float]:
+        """Extract retry-after delay from response headers."""
+        retry_after = headers.get('retry-after') or headers.get('Retry-After')
+        if not retry_after:
+            return None
+            
+        try:
+            return float(retry_after)
+        except ValueError:
+            # Could be HTTP date format, but for simplicity we'll ignore it
+            return None
     
     def get_ready_batches(self) -> List[List[Dict[str, Any]]]:
-        """Get batches that are ready for retry."""
+        """Get batches that are ready for retry with enhanced backoff."""
         ready_batches = []
         remaining_batches = []
         current_time = time.time()
@@ -183,12 +215,30 @@ class RetryManager:
             if current_time >= next_retry_time:
                 if attempt_count <= self.max_retries:
                     ready_batches.append(batch)
-                    # Calculate next retry time with exponential backoff
-                    backoff = min(self.base_backoff * (2 ** attempt_count), self.max_backoff)
-                    remaining_batches.append((batch, attempt_count + 1, current_time + backoff))
+                    
+                    # Calculate next retry time with jittered exponential backoff
+                    base_backoff = min(
+                        self.initial_backoff_ms * (2 ** attempt_count),
+                        self.max_backoff_ms
+                    ) / 1000.0  # Convert to seconds
+                    
+                    # Add jitter to prevent thundering herd
+                    if self.jitter_factor > 0:
+                        jitter_range = base_backoff * self.jitter_factor
+                        jitter = random.uniform(-jitter_range, jitter_range)
+                        base_backoff = max(0.1, base_backoff + jitter)
+                    
+                    remaining_batches.append((batch, attempt_count + 1, current_time + base_backoff))
+                    
+                    logger.debug("Batch ready for retry",
+                               messages=len(batch),
+                               attempt=attempt_count,
+                               next_backoff=base_backoff)
                 else:
                     logger.warning("Batch exceeded max retries, dropping",
-                                 messages=len(batch), attempts=attempt_count)
+                                 messages=len(batch), 
+                                 attempts=attempt_count,
+                                 max_retries=self.max_retries)
             else:
                 remaining_batches.append((batch, attempt_count, next_retry_time))
         
@@ -200,6 +250,59 @@ class RetryManager:
         return {
             'pending_retries': len(self._retry_batches),
             'total_messages_in_retry': sum(len(batch) for batch, _, _ in self._retry_batches)
+        }
+
+
+class IdempotencyManager:
+    """Manages idempotency keys to prevent duplicate batch sending."""
+    
+    def __init__(self, window_sec: int = 3600):
+        self.window_sec = window_sec
+        self._sent_keys: Dict[str, float] = {}  # key -> timestamp
+        self._lock = asyncio.Lock()
+    
+    async def generate_batch_key(self, batch: List[Dict[str, Any]]) -> str:
+        """Generate deterministic key for batch idempotency."""
+        # Create deterministic hash based on message content
+        batch_content = []
+        for msg in batch:
+            # Use message and timestamp for uniqueness
+            content = str(msg.get('message', '')) + str(msg.get('timestamp', ''))
+            batch_content.append(content)
+        
+        batch_str = ''.join(sorted(batch_content))
+        return hashlib.md5(batch_str.encode()).hexdigest()
+    
+    async def is_duplicate(self, key: str) -> bool:
+        """Check if this batch was already sent recently."""
+        async with self._lock:
+            current_time = time.time()
+            
+            # Clean expired keys
+            await self._clean_expired_keys(current_time)
+            
+            if key in self._sent_keys:
+                return True
+            
+            # Record this key
+            self._sent_keys[key] = current_time
+            return False
+    
+    async def _clean_expired_keys(self, current_time: float):
+        """Remove expired keys from cache."""
+        cutoff_time = current_time - self.window_sec
+        expired_keys = [
+            key for key, timestamp in self._sent_keys.items()
+            if timestamp < cutoff_time
+        ]
+        for key in expired_keys:
+            del self._sent_keys[key]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get idempotency statistics."""
+        return {
+            'cached_keys': len(self._sent_keys),
+            'window_sec': self.window_sec
         }
 
 
@@ -246,11 +349,24 @@ class DataShipper:
         # HTTP client
         self.client = None
         
-        # Retry management
+        # Enhanced retry management with SATCOM-friendly defaults
+        retry_config = config.get('retry', {})
         self.retry_manager = RetryManager(
-            max_retries=config.get('max_retries', 3),
-            base_backoff=config.get('retry_backoff', 1.0)
+            max_retries=retry_config.get('max_retries', 5),
+            initial_backoff_ms=retry_config.get('initial_backoff_ms', 500),
+            max_backoff_ms=retry_config.get('max_backoff_ms', 30000),
+            jitter_factor=retry_config.get('jitter_factor', 0.2)
         )
+        
+        # Idempotency management
+        idempotency_config = config.get('idempotency', {})
+        self.idempotency_manager = IdempotencyManager(
+            idempotency_config.get('window_sec', 3600)
+        )
+        
+        # Persistent queue (optional)
+        queue_config = config.get('queue', {})
+        self.persistent_queue = PersistentQueue(queue_config) if queue_config.get('enabled', False) else None
         
         # Rate limiting
         rate_limit = config.get('rate_limit', {})
@@ -265,6 +381,8 @@ class DataShipper:
             'total_messages_sent': 0,
             'total_bytes_sent': 0,
             'total_failures': 0,
+            'total_retries': 0,
+            'total_duplicates_skipped': 0,
             'last_successful_send': None,
             'last_failure': None
         }
@@ -277,9 +395,10 @@ class DataShipper:
         
         if parsed_url.scheme not in ('file', ''):
             # Create HTTP client for HTTP/HTTPS
+            timeout_ms = self.config.get('timeout_ms', 5000)
             timeout = httpx.Timeout(
                 connect=self.config.get('connect_timeout', 10),
-                read=self.config.get('read_timeout', 30),
+                read=timeout_ms / 1000.0,  # Convert ms to seconds
                 write=self.config.get('write_timeout', 10),
                 pool=self.config.get('pool_timeout', 10)
             )
@@ -301,13 +420,24 @@ class DataShipper:
             # No HTTP client needed for file:// URLs
             self.client = None
         
+        # Start persistent queue if enabled
+        if self.persistent_queue:
+            await self.persistent_queue.start()
+        
         self.running = True
         self.ship_task = asyncio.create_task(self._ship_loop())
         
         logger.info("Data shipper started", 
                    url=self.config.get('url'),
                    batch_size=self.config.get('batch_size', 100),
-                   scheme=parsed_url.scheme or 'http')
+                   scheme=parsed_url.scheme or 'http',
+                   persistent_queue_enabled=self.persistent_queue is not None,
+                   retry_config={
+                       'max_retries': self.retry_manager.max_retries,
+                       'initial_backoff_ms': self.retry_manager.initial_backoff_ms,
+                       'max_backoff_ms': self.retry_manager.max_backoff_ms,
+                       'jitter_factor': self.retry_manager.jitter_factor
+                   })
     
     async def stop(self):
         """Stop the data shipper."""
@@ -322,6 +452,10 @@ class DataShipper:
                 await self.ship_task
             except asyncio.CancelledError:
                 pass
+        
+        # Stop persistent queue
+        if self.persistent_queue:
+            await self.persistent_queue.stop()
         
         if self.client:
             await self.client.aclose()
@@ -372,8 +506,19 @@ class DataShipper:
             return
         
         success = False
+        response_headers = None
         
         try:
+            # Check for duplicate batch
+            batch_key = await self.idempotency_manager.generate_batch_key(batch)
+            if await self.idempotency_manager.is_duplicate(batch_key):
+                self.stats['total_duplicates_skipped'] += 1
+                logger.debug("Skipping duplicate batch", 
+                           messages=len(batch),
+                           batch_key=batch_key[:8])
+                success = True  # Mark as success to avoid retry
+                return
+            
             # Rate limiting
             if self.rate_limiter:
                 wait_time = self.rate_limiter.get_wait_time()
@@ -393,7 +538,7 @@ class DataShipper:
                 success = True
             else:
                 # HTTP-based output
-                success = await self._send_http_batch(json_data, batch)
+                success, response_headers = await self._send_http_batch(json_data, batch)
             
             if success:
                 # Update statistics
@@ -403,16 +548,23 @@ class DataShipper:
                 self.stats['last_successful_send'] = time.time()
                 
                 logger.debug("Batch sent successfully",
-                           messages=len(batch), success=success)
+                           messages=len(batch), 
+                           batch_key=batch_key[:8],
+                           is_retry=is_retry)
         
         except Exception as e:
             self.stats['total_failures'] += 1
             self.stats['last_failure'] = time.time()
             
             logger.error("Error sending batch",
-                        error=str(e), messages=len(batch))
+                        error=str(e), 
+                        messages=len(batch),
+                        is_retry=is_retry)
+                        
             if not is_retry:
-                self.retry_manager.add_failed_batch(batch)
+                # Add to retry queue with response headers for Retry-After support
+                self.retry_manager.add_failed_batch(batch, response_headers)
+                self.stats['total_retries'] += 1
         
         finally:
             # Commit or rollback the batch in the buffer
@@ -451,8 +603,8 @@ class DataShipper:
                    json_file=json_path,
                    size_bytes=len(json_data))
     
-    async def _send_http_batch(self, json_data: str, batch: List[Dict[str, Any]]) -> bool:
-        """Send batch via HTTP/HTTPS."""
+    async def _send_http_batch(self, json_data: str, batch: List[Dict[str, Any]]) -> Tuple[bool, Optional[Dict[str, str]]]:
+        """Send batch via HTTP/HTTPS and return success status and response headers."""
         try:
             # Compression
             if self.config.get('compression', True):
@@ -483,18 +635,36 @@ class DataShipper:
             
             logger.debug("HTTP batch sent successfully",
                         messages=len(batch), status=response.status_code)
-            return True
+            return True, dict(response.headers)
             
         except httpx.HTTPStatusError as e:
-            # Don't retry client errors (4xx)
-            if 400 <= e.response.status_code < 500:
-                logger.error("Client error sending batch, not retrying",
-                           status=e.response.status_code, messages=len(batch))
-            else:
-                logger.warning("Server error sending batch, will retry",
-                             status=e.response.status_code, messages=len(batch))
-                raise  # Re-raise to trigger retry
-            return False
+            response_headers = dict(e.response.headers) if e.response else None
+            
+            # Handle different HTTP status codes
+            if e.response:
+                status_code = e.response.status_code
+                
+                if status_code == 429:
+                    # Rate limited - should retry with Retry-After
+                    logger.warning("Rate limited by server, will retry with backoff",
+                                 status=status_code, 
+                                 messages=len(batch),
+                                 retry_after=response_headers.get('Retry-After', 'not specified'))
+                    raise  # Re-raise to trigger retry
+                    
+                elif 400 <= status_code < 500:
+                    # Client errors (except 429) - don't retry
+                    logger.error("Client error sending batch, not retrying",
+                               status=status_code, messages=len(batch))
+                    return False, response_headers
+                    
+                elif status_code >= 500:
+                    # Server errors - should retry
+                    logger.warning("Server error sending batch, will retry",
+                                 status=status_code, messages=len(batch))
+                    raise  # Re-raise to trigger retry
+            
+            return False, response_headers
             
         except (httpx.RequestError, asyncio.TimeoutError) as e:
             logger.warning("Network error sending batch, will retry",
@@ -506,7 +676,13 @@ class DataShipper:
         stats = self.stats.copy()
         stats['buffer'] = self.buffer.get_stats()
         stats['retry'] = self.retry_manager.get_stats()
+        stats['idempotency'] = self.idempotency_manager.get_stats()
         stats['running'] = self.running
+        
+        # Add persistent queue stats if available
+        if self.persistent_queue:
+            stats['persistent_queue'] = self.persistent_queue.get_stats()
+        
         return stats
 
 
