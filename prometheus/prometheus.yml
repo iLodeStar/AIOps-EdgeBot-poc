@@ -1,0 +1,55 @@
+# Prometheus configuration for EdgeBot observability
+global:
+  scrape_interval: 15s # Set the scrape interval to every 15 seconds
+  evaluation_interval: 15s # Evaluate rules every 15 seconds
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'
+rule_files:
+  - "alerts.yml"
+
+# A scrape configuration containing exactly one endpoint to scrape
+scrape_configs:
+  # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
+  
+  # Scrape Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Scrape Loki metrics
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Scrape Mothership metrics - this is the main application
+  - job_name: 'mothership'
+    static_configs:
+      - targets: ['host.docker.internal:8080']  # Default mothership port
+    metrics_path: /metrics
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    scheme: http
+
+  # Scrape Alertmanager metrics
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+    metrics_path: /metrics
+    scrape_interval: 30s
+
+  # Optional: Scrape Grafana metrics if available
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    # Note: Grafana metrics require authentication or anonymous access to be enabled

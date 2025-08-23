@@ -1,5 +1,5 @@
-# Local Observability Stack with Loki + Grafana
-# Use this to run Loki and Grafana locally for EdgeBot log analysis
+# Full Observability Stack with Loki + Prometheus + Alertmanager + Grafana
+# Use this to run the complete observability stack for EdgeBot monitoring
 
 version: '3.8'
 
@@ -21,6 +21,54 @@ services:
       retries: 3
       start_period: 40s
 
+  prometheus:
+    image: prom/prometheus:v2.40.0
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus-data:/prometheus
+    networks:
+      - observability
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager:/etc/alertmanager
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - observability
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   grafana:
     image: grafana/grafana:10.2.0
     ports:
@@ -28,7 +76,6 @@ services:
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning
@@ -37,6 +84,8 @@ services:
     restart: unless-stopped
     depends_on:
       loki:
+        condition: service_healthy
+      prometheus:
         condition: service_healthy
 
   # Optional: Promtail for log collection (if you want to collect local logs)
@@ -56,6 +105,10 @@ services:
 volumes:
   loki-data:
     driver: local
+  prometheus-data:
+    driver: local
+  alertmanager-data:
+    driver: local
   grafana-data:
     driver: local
 
@@ -64,14 +117,17 @@ networks:
     driver: bridge
 
 # Usage:
-# 1. Start Loki + Grafana:
+# 1. Start full observability stack:
 #    docker-compose -f compose.observability.yml up -d
 #
-# 2. Access Grafana:
-#    http://localhost:3000 (admin/admin)
+# 2. Access services:
+#    - Grafana: http://localhost:3000 (admin/admin)
+#    - Prometheus: http://localhost:9090
+#    - Alertmanager: http://localhost:9093
+#    - Loki: http://localhost:3100
 #
-# 3. Start mothership with Loki enabled:
-#    export LOKI_ENABLED=true
+# 3. Start mothership with observability enabled:
+#    export LOKI_ENABLED=true (optional, for logs)
 #    export LOKI_URL=http://localhost:3100
 #    cd mothership && python -m app.server
 #
