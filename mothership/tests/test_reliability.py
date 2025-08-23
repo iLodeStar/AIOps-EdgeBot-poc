@@ -469,8 +469,18 @@ class TestResilientSink:
     @pytest.mark.asyncio
     async def test_resilient_sink_with_retry(self, temp_dir):
         """Test resilient sink with retry on failure."""
-        # Mock sink that fails once then succeeds
-        mock_sink = MockSink(fail_count=1)
+        # Mock sink that fails once then succeeds with a retryable error
+        from unittest.mock import AsyncMock
+        mock_sink = AsyncMock()
+        
+        # First call fails with timeout, second succeeds
+        mock_sink.write_events.side_effect = [
+            asyncio.TimeoutError("Mock timeout"),
+            {"written": 1, "errors": 0}
+        ]
+        mock_sink.start = AsyncMock()
+        mock_sink.stop = AsyncMock()
+        mock_sink.is_healthy.return_value = True
         
         config = {
             'retry': {
@@ -492,37 +502,56 @@ class TestResilientSink:
         
         # Should succeed after retry
         assert result["written"] == 1
-        assert len(mock_sink.calls) == 2  # Initial call + 1 retry
+        assert mock_sink.write_events.call_count == 2  # Initial call + 1 retry
         
     @pytest.mark.asyncio
     async def test_resilient_sink_with_circuit_breaker(self, temp_dir):
         """Test resilient sink with circuit breaker."""
-        mock_sink = MockSink(fail_count=5)  # Always fails
+        from unittest.mock import AsyncMock
+        mock_sink = AsyncMock()
+        
+        # Always fails with retryable error
+        mock_sink.write_events.side_effect = asyncio.TimeoutError("Mock timeout")
+        mock_sink.start = AsyncMock()
+        mock_sink.stop = AsyncMock()  
+        mock_sink.is_healthy.return_value = True
         
         config = {
+            'retry': {
+                'enabled': True,
+                'max_retries': 1,  # Only 1 retry to speed up test
+                'initial_backoff_ms': 10
+            },
             'circuit_breaker': {
                 'enabled': True,
-                'failure_threshold': 2
+                'failure_threshold': 2  # Trip after 2 failures
             }
         }
         
         resilient = ResilientSink("test", mock_sink, config)
-        await resilient.start()
         
-        events = [{"message": "test"}]
+        with patch('asyncio.sleep'):  # Skip sleep delays
+            await resilient.start()
+            
+            events = [{"message": "test"}]
+            
+            # First call: initial + 1 retry = 2 calls, fails, CB failure_count = 1
+            result1 = await resilient.write_events(events) 
+            
+            # Second call: initial + 1 retry = 2 calls, fails, CB failure_count = 2, CB opens
+            result2 = await resilient.write_events(events)
+            
+            # Third call: CB is open, should be rejected immediately
+            result3 = await resilient.write_events(events)
+            
+            await resilient.stop()
         
-        # First two calls should fail and trip circuit breaker
-        result1 = await resilient.write_events(events) 
-        result2 = await resilient.write_events(events)
+        # First two calls each make 2 attempts (initial + 1 retry)
+        # Third call is rejected by circuit breaker
+        assert mock_sink.write_events.call_count == 4  # 2 + 2 + 0
         
-        # Third call should be rejected by circuit breaker
-        result3 = await resilient.write_events(events)
-        
-        await resilient.stop()
-        
-        # Circuit breaker should prevent the third call
-        assert len(mock_sink.calls) <= 2
-        assert result3["errors"] > 0 or result3["queued"] > 0
+        # Third call should return errors since no queue
+        assert result3["errors"] > 0
         
     @pytest.mark.asyncio
     async def test_resilient_sink_with_queue(self, temp_dir):
