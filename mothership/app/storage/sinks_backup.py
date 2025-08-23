@@ -13,7 +13,6 @@ from ..metrics import mship_sink_write_seconds
 logger = structlog.get_logger(__name__)
 
 
-
 class TSDBSink:
     """TimescaleDB sink wrapper (placeholder implementation)."""
     
@@ -201,14 +200,11 @@ class SinksManager:
         
         for name, sink in self.sinks.items():
             is_healthy = sink.is_healthy()
-            
             sink_health[name] = {
                 "healthy": is_healthy,
                 "enabled": True,
                 "stats": sink.get_stats()
             }
-            
-            # Consider sink unhealthy if not healthy
             if not is_healthy:
                 overall_healthy = False
         
