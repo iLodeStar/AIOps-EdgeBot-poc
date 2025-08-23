@@ -310,6 +310,28 @@ class ConfigManager:
         if os.getenv('TSDB_DLQ_DIR'):
             self._config.setdefault('sinks', {}).setdefault('timescaledb', {}).setdefault('queue', {})['dlq_dir'] = os.getenv('TSDB_DLQ_DIR')
         
+        # Sink reliability configuration (new SATCOM-friendly defaults)
+        if os.getenv('SINK_DEFAULT_MAX_RETRIES'):
+            self._config.setdefault('sink_defaults', {})['max_retries'] = int(os.getenv('SINK_DEFAULT_MAX_RETRIES'))
+        if os.getenv('SINK_DEFAULT_INITIAL_BACKOFF_MS'):
+            self._config.setdefault('sink_defaults', {})['initial_backoff_ms'] = int(os.getenv('SINK_DEFAULT_INITIAL_BACKOFF_MS'))
+        if os.getenv('SINK_DEFAULT_MAX_BACKOFF_MS'):
+            self._config.setdefault('sink_defaults', {})['max_backoff_ms'] = int(os.getenv('SINK_DEFAULT_MAX_BACKOFF_MS'))
+        if os.getenv('SINK_DEFAULT_JITTER_FACTOR'):
+            self._config.setdefault('sink_defaults', {})['jitter_factor'] = float(os.getenv('SINK_DEFAULT_JITTER_FACTOR'))
+        if os.getenv('SINK_DEFAULT_TIMEOUT_MS'):
+            self._config.setdefault('sink_defaults', {})['timeout_ms'] = int(os.getenv('SINK_DEFAULT_TIMEOUT_MS'))
+        if os.getenv('SINK_DEFAULT_FAILURE_THRESHOLD'):
+            self._config.setdefault('sink_defaults', {})['failure_threshold'] = int(os.getenv('SINK_DEFAULT_FAILURE_THRESHOLD'))
+        if os.getenv('SINK_DEFAULT_OPEN_DURATION_SEC'):
+            self._config.setdefault('sink_defaults', {})['open_duration_sec'] = int(os.getenv('SINK_DEFAULT_OPEN_DURATION_SEC'))
+        if os.getenv('SINK_DEFAULT_HALF_OPEN_MAX_INFLIGHT'):
+            self._config.setdefault('sink_defaults', {})['half_open_max_inflight'] = int(os.getenv('SINK_DEFAULT_HALF_OPEN_MAX_INFLIGHT'))
+        
+        # Idempotency configuration
+        if os.getenv('IDEMPOTENCY_WINDOW_SEC'):
+            self._config.setdefault('idempotency', {})['window_sec'] = int(os.getenv('IDEMPOTENCY_WINDOW_SEC'))
+        
         # Logging
         if os.getenv('MOTHERSHIP_LOG_LEVEL'):
             self._config.setdefault('logging', {})['level'] = os.getenv('MOTHERSHIP_LOG_LEVEL')
@@ -409,6 +431,20 @@ class ConfigManager:
                     'retry_backoff_seconds': 1.0,
                     'timeout_seconds': 30.0
                 }
+            },
+            'sink_defaults': {
+                # SATCOM-friendly defaults (safe for satellite/at-sea networks)
+                'max_retries': 5,
+                'initial_backoff_ms': 500,
+                'max_backoff_ms': 30000,
+                'jitter_factor': 0.2,
+                'timeout_ms': 5000,
+                'failure_threshold': 5,
+                'open_duration_sec': 60,
+                'half_open_max_inflight': 1
+            },
+            'idempotency': {
+                'window_sec': 3600  # 1 hour deduplication window
             },
             'logging': {
                 'level': 'INFO',

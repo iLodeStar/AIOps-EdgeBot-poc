@@ -90,6 +90,30 @@ class ConfigManager:
             self._config.setdefault('inputs', {}).setdefault('weather', {})['longitude'] = float(os.getenv('EDGEBOT_WEATHER_LON'))
         if os.getenv('EDGEBOT_WEATHER_CITY'):
             self._config.setdefault('inputs', {}).setdefault('weather', {})['city'] = os.getenv('EDGEBOT_WEATHER_CITY')
+        
+        # NMEA input configuration  
+        if os.getenv('EDGEBOT_NMEA_ENABLED'):
+            self._config.setdefault('inputs', {}).setdefault('nmea', {})['enabled'] = os.getenv('EDGEBOT_NMEA_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('EDGEBOT_NMEA_UDP_PORT'):
+            self._config.setdefault('inputs', {}).setdefault('nmea', {})['udp_port'] = int(os.getenv('EDGEBOT_NMEA_UDP_PORT'))
+        
+        # Persistent queue configuration (new)
+        if os.getenv('QUEUE_ENABLED'):
+            self._config.setdefault('queue', {})['enabled'] = os.getenv('QUEUE_ENABLED').lower() in ('true', '1', 'yes', 'on')
+        if os.getenv('QUEUE_DIR'):
+            self._config.setdefault('queue', {})['dir'] = os.getenv('QUEUE_DIR')
+        if os.getenv('QUEUE_MAX_BYTES'):
+            self._config.setdefault('queue', {})['max_bytes'] = int(os.getenv('QUEUE_MAX_BYTES'))
+        if os.getenv('QUEUE_FLUSH_INTERVAL_MS'):
+            self._config.setdefault('queue', {})['flush_interval_ms'] = int(os.getenv('QUEUE_FLUSH_INTERVAL_MS'))
+        if os.getenv('DLQ_DIR'):
+            self._config.setdefault('queue', {})['dlq_dir'] = os.getenv('DLQ_DIR')
+        if os.getenv('FLUSH_BANDWIDTH_BYTES_PER_SEC'):
+            self._config.setdefault('queue', {})['flush_bandwidth_bytes_per_sec'] = int(os.getenv('FLUSH_BANDWIDTH_BYTES_PER_SEC'))
+        
+        # Idempotency configuration  
+        if os.getenv('IDEMPOTENCY_WINDOW_SEC'):
+            self._config.setdefault('idempotency', {})['window_sec'] = int(os.getenv('IDEMPOTENCY_WINDOW_SEC'))
     
     def _validate_config(self):
         """Validate configuration values."""
@@ -207,6 +231,17 @@ class ConfigManager:
                 'disk_buffer': False,
                 'disk_buffer_path': '/tmp/edgebot_buffer.db',
                 'disk_buffer_max_size': '100MB'
+            },
+            'queue': {
+                'enabled': False,  # Optional persistent queue
+                'dir': '/var/lib/edgebot/queue',
+                'max_bytes': 100*1024*1024,  # 100MB
+                'flush_interval_ms': 5000,   # 5 seconds
+                'dlq_dir': '/var/lib/edgebot/dlq',
+                'flush_bandwidth_bytes_per_sec': 1024*1024  # 1MB/s default limit
+            },
+            'idempotency': {
+                'window_sec': 3600  # 1 hour deduplication window
             }
         }
     
