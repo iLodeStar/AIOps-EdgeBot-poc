@@ -1,0 +1,134 @@
+# Docker Compose configuration for E2E testing
+# This file defines services needed for comprehensive end-to-end testing
+# of EdgeBot and Mothership components.
+
+version: '3.8'
+
+services:
+  # Loki for log storage and querying in E2E tests
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-e2e-data:/loki
+    networks:
+      - e2e-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Optional Grafana for manual testing and debugging
+  grafana:
+    image: grafana/grafana:10.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-e2e-data:/var/lib/grafana
+    networks:
+      - e2e-test
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+    profiles:
+      - debug  # Only start when --profile debug is used
+
+  # EdgeBot service for integration tests
+  edgebot:
+    build:
+      context: ./edge_node
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"  # Main service port
+      - "8081:8081"  # Health/metrics port
+      - "5514:5514/udp"  # Syslog UDP
+      - "5515:5515/tcp"  # Syslog TCP
+    volumes:
+      - ./tests/e2e/data/edgebot:/app/data
+      - ./tests/e2e/configs:/app/configs
+    environment:
+      - EDGEBOT_CONFIG_FILE=/app/configs/edgebot-config.yaml
+      - EDGEBOT_OUTPUT_DIR=/app/data/out
+      - EDGEBOT_LOG_LEVEL=INFO
+    networks:
+      - e2e-test
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - edgebot  # Only start when --profile edgebot is used
+
+  # Mothership service for integration tests  
+  mothership:
+    build:
+      context: ./mothership
+      dockerfile: Dockerfile
+    ports:
+      - "8443:8443"  # Main service port
+    volumes:
+      - ./tests/e2e/configs:/app/configs
+    environment:
+      - MOTHERSHIP_CONFIG_FILE=/app/configs/mothership-config.yaml
+      - LOKI_ENABLED=true
+      - LOKI_URL=http://loki:3100
+      - TSDB_ENABLED=false
+      - MOTHERSHIP_LLM_ENABLED=false
+      - LOG_LEVEL=INFO
+    networks:
+      - e2e-test
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8443/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - mothership  # Only start when --profile mothership is used
+
+volumes:
+  loki-e2e-data:
+    driver: local
+  grafana-e2e-data:
+    driver: local
+
+networks:
+  e2e-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Usage examples:
+#
+# 1. Start only Loki for Mothership standalone tests:
+#    docker-compose -f docker-compose.e2e.yml up -d loki
+#
+# 2. Start Loki + Mothership for Mothership E2E tests:
+#    docker-compose -f docker-compose.e2e.yml --profile mothership up -d
+#
+# 3. Start full stack for cross-phase integration tests:
+#    docker-compose -f docker-compose.e2e.yml --profile edgebot --profile mothership up -d
+#
+# 4. Start with Grafana for debugging:
+#    docker-compose -f docker-compose.e2e.yml --profile mothership --profile debug up -d
+#
+# 5. Stop and clean up:
+#    docker-compose -f docker-compose.e2e.yml down -v
