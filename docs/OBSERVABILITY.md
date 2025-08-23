@@ -181,9 +181,172 @@ By default, all alerts are sent to a "null" receiver that discards them. This is
 3. Restart Alertmanager: `docker-compose restart alertmanager`
 
 ### Enable Email Notifications
-1. Configure SMTP settings in `alertmanager/config.yml`
-2. Add email configurations to receivers
-3. Restart Alertmanager
+
+Email notifications allow you to receive alerts via email when critical or warning events occur in your EdgeBot deployment.
+
+#### Step 1: Configure SMTP Settings
+
+Create a `.env` file in the root directory (or copy from `.env.example`):
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and configure your SMTP settings:
+
+```bash
+# SMTP server settings
+ALERT_SMTP_HOST=smtp.gmail.com
+ALERT_SMTP_PORT=587
+ALERT_SMTP_USER=your-email@gmail.com
+ALERT_SMTP_PASS=your-app-password
+ALERT_SMTP_STARTTLS=true
+
+# Email sender and recipients
+ALERT_EMAIL_FROM=alertmanager@yourcompany.com
+ALERT_EMAIL_TO=ops-team@yourcompany.com
+
+# For multiple recipients, separate with commas:
+# ALERT_EMAIL_TO=admin1@yourcompany.com,admin2@yourcompany.com
+```
+
+**SMTP Configuration Examples:**
+
+- **Gmail**: Use `smtp.gmail.com:587` with an [App Password](https://support.google.com/accounts/answer/185833)
+- **Outlook/Hotmail**: Use `smtp-mail.outlook.com:587`
+- **Yahoo**: Use `smtp.mail.yahoo.com:587`
+- **Corporate SMTP**: Check with your IT department for server details
+
+#### Step 2: Start/Restart the Observability Stack
+
+```bash
+# Start the stack (will automatically load .env file)
+docker compose -f compose.observability.yml up -d
+
+# Or restart if already running
+docker compose -f compose.observability.yml restart alertmanager
+```
+
+#### Step 3: Verify Configuration
+
+1. Check Alertmanager status: http://localhost:9093/#/status
+2. Look for email receiver configuration in the "Config" section
+3. Verify no configuration errors are shown
+
+#### Step 4: Test Email Delivery (Synthetic Test)
+
+To test email notifications work, you can temporarily trigger an alert:
+
+1. **Lower the HighIngestLatency95th threshold** to trigger easily:
+   ```bash
+   # Edit prometheus/alerts.yml temporarily
+   sed -i 's/> 1.0/> 0.001/' prometheus/alerts.yml
+   ```
+
+2. **Restart Prometheus to reload rules**:
+   ```bash
+   docker compose -f compose.observability.yml restart prometheus
+   ```
+
+3. **Start mothership to generate metrics**:
+   ```bash
+   cd mothership
+   python -m app.server
+   ```
+
+4. **Send some test data** to trigger latency metrics:
+   ```bash
+   curl -X POST http://localhost:8080/ingest -H "Content-Type: application/json" -d '{"test": "data"}'
+   ```
+
+5. **Check for alerts** in Alertmanager: http://localhost:9093/#/alerts
+
+6. **Wait for email** (should arrive within ~10 seconds if alert fires)
+
+7. **Restore the original threshold**:
+   ```bash
+   git checkout prometheus/alerts.yml
+   docker compose -f compose.observability.yml restart prometheus
+   ```
+
+#### Troubleshooting Email Notifications
+
+**No emails received:**
+1. Check Alertmanager logs: `docker compose -f compose.observability.yml logs alertmanager`
+2. Verify SMTP credentials are correct
+3. Check spam folder
+4. For Gmail, ensure "Less secure app access" is enabled or use App Password
+
+**Authentication errors:**
+1. For Gmail: Use an [App Password](https://support.google.com/accounts/answer/185833) instead of your regular password
+2. Enable 2-factor authentication first, then generate an App Password
+
+**Connection errors:**
+1. Verify SMTP host and port are correct
+2. Check if your network/firewall blocks SMTP ports
+3. Try different STARTTLS settings (true/false)
+
+**Configuration errors:**
+1. Check Alertmanager config at: http://localhost:9093/#/status
+2. Verify `.env` file variables are loaded correctly
+3. Restart the observability stack after configuration changes
+
+#### Security Considerations
+
+- **Never commit** your `.env` file with real credentials to version control
+- Use strong, unique passwords for SMTP authentication
+- Consider using App Passwords instead of your main email password
+- For production deployments, use Docker Secrets or Kubernetes Secrets:
+
+```yaml
+# Docker Swarm example
+secrets:
+  smtp_password:
+    external: true
+
+services:
+  alertmanager:
+    secrets:
+      - smtp_password
+    environment:
+      - ALERT_SMTP_PASS_FILE=/run/secrets/smtp_password
+```
+
+#### Kubernetes Deployment
+
+For Kubernetes deployments, store SMTP credentials in a Secret:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-smtp
+type: Opaque
+stringData:
+  smtp-user: your-email@gmail.com
+  smtp-pass: your-app-password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+spec:
+  template:
+    spec:
+      containers:
+      - name: alertmanager
+        env:
+        - name: ALERT_SMTP_USER
+          valueFrom:
+            secretKeyRef:
+              name: alertmanager-smtp
+              key: smtp-user
+        - name: ALERT_SMTP_PASS
+          valueFrom:
+            secretKeyRef:
+              name: alertmanager-smtp
+              key: smtp-pass
+```
 
 ## Dashboards
 
@@ -253,6 +416,13 @@ The main dashboard (`edgebot-observability.json`) includes:
 | `LOKI_ENABLED` | `false` | Enable Loki log sink |
 | `LOKI_URL` | `http://localhost:3100` | Loki push URL |
 | `TSDB_ENABLED` | `true` | Enable TimescaleDB sink |
+| `ALERT_SMTP_HOST` | - | SMTP server hostname for email alerts |
+| `ALERT_SMTP_PORT` | `587` | SMTP server port |
+| `ALERT_SMTP_USER` | - | SMTP username for authentication |
+| `ALERT_SMTP_PASS` | - | SMTP password for authentication |
+| `ALERT_SMTP_STARTTLS` | `true` | Enable STARTTLS for SMTP |
+| `ALERT_EMAIL_FROM` | `alertmanager@edgebot.local` | Sender email address |
+| `ALERT_EMAIL_TO` | - | Recipient email address(es), comma-separated |
 
 ### Ports
 | Service | Port | Description |

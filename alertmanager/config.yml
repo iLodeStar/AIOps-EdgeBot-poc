@@ -1,8 +1,12 @@
 # Alertmanager configuration for EdgeBot
 global:
-  # Global settings for all notifications
-  smtp_smarthost: 'localhost:587'
-  smtp_from: 'alertmanager@edgebot.local'
+  # Global SMTP settings for email notifications
+  # These are configured via environment variables
+  smtp_smarthost: '${ALERT_SMTP_HOST}:${ALERT_SMTP_PORT}'
+  smtp_from: '${ALERT_EMAIL_FROM}'
+  smtp_auth_username: '${ALERT_SMTP_USER}'
+  smtp_auth_password: '${ALERT_SMTP_PASS}'
+  smtp_require_tls: true
   resolve_timeout: 5m
 
 # Templates for notifications
@@ -19,6 +23,13 @@ route:
   receiver: 'null'  # Default receiver (does nothing)
   
   routes:
+    # Email route for alerts with severity >= warning (if email is configured)
+    - match_re:
+        severity: (critical|warning)
+      receiver: 'email-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+    
     # Critical alerts - could be routed to PagerDuty, immediate notifications, etc.
     - match:
         severity: critical
@@ -54,6 +65,11 @@ receivers:
   # Null receiver - discards alerts (default for demo/development)
   - name: 'null'
 
+  # Email receiver for all critical and warning alerts
+  - name: 'email-alerts'
+    email_configs:
+      - to: '${ALERT_EMAIL_TO}'
+
   # Critical alerts receiver
   - name: 'critical-alerts'
     # Uncomment and configure for Slack notifications:
@@ -64,15 +80,9 @@ receivers:
     #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
     #     send_resolved: true
     
-    # Uncomment and configure for email notifications:
-    # email_configs:
-    #   - to: 'ops-team@yourcompany.com'
-    #     subject: 'CRITICAL: EdgeBot Alert'
-    #     body: |
-    #       {{ range .Alerts }}
-    #       Alert: {{ .Annotations.summary }}
-    #       Description: {{ .Annotations.description }}
-    #       {{ end }}
+    # Email configuration for critical alerts (high priority)
+    email_configs:
+      - to: '${ALERT_EMAIL_TO}'
 
   # Warning alerts receiver  
   - name: 'warning-alerts'
@@ -86,16 +96,23 @@ receivers:
 
 # Configuration notes:
 # 
+# To enable email notifications:
+# 1. Create a .env file in the root directory with your SMTP settings:
+#    ALERT_SMTP_HOST=smtp.gmail.com
+#    ALERT_SMTP_PORT=587
+#    ALERT_SMTP_USER=your-email@gmail.com
+#    ALERT_SMTP_PASS=your-app-password
+#    ALERT_SMTP_STARTTLS=true
+#    ALERT_EMAIL_FROM=alertmanager@yourcompany.com
+#    ALERT_EMAIL_TO=ops-team@yourcompany.com
+# 2. Start the observability stack: docker compose -f compose.observability.yml up -d
+# 3. Verify configuration at: http://localhost:9093/#/status
+# 
 # To enable Slack notifications:
 # 1. Create a Slack webhook: https://api.slack.com/messaging/webhooks
 # 2. Replace 'YOUR_SLACK_WEBHOOK_URL_HERE' with your webhook URL
 # 3. Uncomment the slack_configs sections above
-# 4. Restart Alertmanager: docker-compose restart alertmanager
-#
-# To enable email notifications:  
-# 1. Configure the global SMTP settings above
-# 2. Uncomment and configure the email_configs sections
-# 3. Restart Alertmanager
+# 4. Restart Alertmanager: docker compose restart alertmanager
 #
 # For PagerDuty, OpsGenie, and other integrations, see:
 # https://prometheus.io/docs/alerting/latest/configuration/
