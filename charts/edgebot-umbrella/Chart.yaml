@@ -5,10 +5,12 @@ type: application
 version: 0.1.0
 appVersion: "1.5.0"
 home: https://github.com/iLodeStar/AIOps-EdgeBot-poc
+icon: https://raw.githubusercontent.com/iLodeStar/AIOps-EdgeBot-poc/main/docs/images/edgebot-icon.png
 sources:
   - https://github.com/iLodeStar/AIOps-EdgeBot-poc
 maintainers:
   - name: EdgeBot Team
+    email: team@edgebot.com
 keywords:
   - edgebot
   - mothership
