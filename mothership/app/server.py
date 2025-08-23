@@ -121,11 +121,8 @@ async def startup_event():
         
         # Configure logging level
         log_level = config.get('logging', {}).get('level', 'INFO')
-        structlog.configure(
-            wrapper_class=structlog.make_filtering_bound_logger(
-                getattr(structlog.stdlib.LoggingLogLevel, log_level)
-            )
-        )
+        import logging
+        logging.getLogger().setLevel(getattr(logging, log_level.upper(), logging.INFO))
         
         # Initialize TimescaleDB writer
         db_config = config['database']
