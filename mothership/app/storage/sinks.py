@@ -141,10 +141,16 @@ class SinksManager:
             start_tasks.append(sink.start())
 
         if start_tasks:
-            await asyncio.gather(*start_tasks, return_exceptions=True)
-
-        # Start background queue processing if enabled
-        # Note: Queue processing is handled by ResilientSink instances
+            results = await asyncio.gather(*start_tasks, return_exceptions=True)
+            
+            # Check for exceptions in sink startup
+            for i, result in enumerate(results):
+                sink_name = list(self.sinks.keys())[i]
+                if isinstance(result, Exception):
+                    logger.error("Failed to start sink", sink=sink_name, error=str(result))
+                    # Don't raise here, but log the failure for debugging
+                else:
+                    logger.info("Sink started successfully", sink=sink_name)
 
         logger.info("SinksManager started", enabled_sinks=list(self.sinks.keys()))
 
