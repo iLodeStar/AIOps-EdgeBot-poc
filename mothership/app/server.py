@@ -172,7 +172,9 @@ async def startup_event():
                 app_state["sinks_manager"] = sinks_manager
                 logger.info("Fallback sinks manager started successfully")
             except Exception as fallback_error:
-                logger.error("Failed to start fallback sinks manager", error=str(fallback_error))
+                logger.error(
+                    "Failed to start fallback sinks manager", error=str(fallback_error)
+                )
                 # Create an empty sinks manager as last resort
                 sinks_manager = SinksManager({}, tsdb_writer=None)
                 app_state["sinks_manager"] = sinks_manager
@@ -257,9 +259,31 @@ async def shutdown_event():
 
 
 @app.post("/ingest", response_model=IngestResponse)
-@mship_ingest_seconds.time()
 async def ingest_events(request: IngestRequest) -> IngestResponse:
     """Ingest events for processing with dual-sink support."""
+    # Safety wrapper to catch any exception that happens before the main try block
+    try:
+        return await _ingest_events_internal(request)
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error(
+            "Critical error in ingest endpoint before main processing",
+            error=str(e),
+            exc_info=True,
+        )
+        mship_requests_total.labels(
+            method="POST", endpoint="/ingest", status="500"
+        ).inc()
+        raise HTTPException(
+            status_code=500, detail=f"Critical ingestion error: {str(e)}"
+        )
+
+
+@mship_ingest_seconds.time()
+async def _ingest_events_internal(request: IngestRequest) -> IngestResponse:
+    """Internal ingest processing with full error handling."""
     start_time = time.time()
 
     try:
@@ -284,7 +308,7 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
         if pipeline is None:
             logger.error("Pipeline not initialized in app_state")
             raise HTTPException(status_code=500, detail="Pipeline not initialized")
-            
+
         processed_events = []
 
         with mship_pipeline_seconds.time():
@@ -297,21 +321,36 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
                     processed_events.append(processed_event)
                     logger.debug(f"Event processed successfully: {processed_event}")
                 except Exception as e:
-                    logger.error(f"Error processing event: {e}", event=event.model_dump())
+                    logger.error(
+                        f"Error processing event: {e}",
+                        event=event.model_dump(),
+                        exc_info=True,
+                    )
                     # Continue processing other events instead of failing completely
                     continue
 
-        logger.info(f"Successfully processed {len(processed_events)} events through pipeline")
+        logger.info(
+            f"Successfully processed {len(processed_events)} events through pipeline"
+        )
 
         # Store in dual-sink architecture
         sinks_manager = app_state.get("sinks_manager")
         if sinks_manager is None:
             logger.error("SinksManager not initialized in app_state")
             raise HTTPException(status_code=500, detail="SinksManager not initialized")
-            
+
         logger.info(f"Writing {len(processed_events)} events to sinks")
-        sink_results = await sinks_manager.write_events(processed_events)
-        logger.info(f"Sink write results: {sink_results}")
+
+        # Add additional error handling around sink writes
+        try:
+            sink_results = await sinks_manager.write_events(processed_events)
+            logger.info(f"Sink write results: {sink_results}")
+        except Exception as sink_error:
+            logger.error(
+                f"Critical error during sink write: {sink_error}", exc_info=True
+            )
+            # Return empty results rather than crashing
+            sink_results = {}
 
         # Update metrics as per requirements
         total_written = 0
@@ -352,10 +391,12 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
             method="POST", endpoint="/ingest", status="500"
         ).inc()
         error_msg = f"Ingestion failed: {str(e)}"
-        logger.error("Unhandled error during ingestion", 
-                    error=error_msg, 
-                    exc_info=True,
-                    events_count=len(events) if 'events' in locals() else 0)
+        logger.error(
+            "Unhandled error during ingestion",
+            error=error_msg,
+            exc_info=True,
+            events_count=len(events) if "events" in locals() else 0,
+        )
         raise HTTPException(status_code=500, detail=error_msg)
 
 

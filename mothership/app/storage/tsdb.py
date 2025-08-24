@@ -190,7 +190,20 @@ class TimescaleDBWriter:
         except Exception as e:
             self.stats["total_errors"] += 1
             self.stats["last_error_time"] = time.time()
-            logger.error("Failed to insert events", error=str(e), count=len(events))
+            logger.error(
+                "Failed to insert events",
+                error=str(e),
+                count=len(events),
+                table=self.table_name,
+                exc_info=True,
+            )
+            # Add more context about the failure
+            if "null value in column" in str(e).lower():
+                logger.error(
+                    "Database constraint violation - null value detected", error=str(e)
+                )
+            elif "connection" in str(e).lower():
+                logger.error("Database connection failure during insert", error=str(e))
             raise
 
     async def insert_single_event(self, event: Dict[str, Any]) -> bool:
@@ -202,11 +215,15 @@ class TimescaleDBWriter:
         # Extract timestamp
         timestamp = self._extract_timestamp(event)
 
-        # Extract type
+        # Extract type - ensure it's never null/empty
         event_type = event.get("type", "unknown")
+        if not event_type or not event_type.strip():
+            event_type = "unknown"
 
-        # Extract source
+        # Extract source - ensure it's never null/empty
         source = self._extract_source(event)
+        if not source or not source.strip():
+            source = "unknown"
 
         # Prepare data payload (everything else)
         data = event.copy()
@@ -216,7 +233,10 @@ class TimescaleDBWriter:
         data.pop("time", None)
         data.pop("@timestamp", None)
 
-        return (timestamp, event_type, source, json.dumps(data))
+        # Ensure data is never null - serialize as JSON
+        json_data = json.dumps(data) if data else "{}"
+
+        return (timestamp, event_type, source, json_data)
 
     def _extract_timestamp(self, event: Dict[str, Any]) -> datetime:
         """Extract timestamp from event, defaulting to current time."""
