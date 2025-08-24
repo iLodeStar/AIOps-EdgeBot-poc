@@ -265,7 +265,7 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
                 try:
                     # Convert to dict for pipeline processing
                     event_dict = event.model_dump()
-                    processed_event = await pipeline.process_event(event_dict)
+                    processed_event = await pipeline.process_single_event(event_dict)
                     processed_events.append(processed_event)
                 except Exception as e:
                     logger.error(f"Error processing event: {e}", event=event.model_dump())
