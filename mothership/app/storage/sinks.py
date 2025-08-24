@@ -121,11 +121,13 @@ class SinksManager:
         sinks_config = config.get("sinks", {})
 
         # TimescaleDB sink using the provided writer (from app startup) if available
-        if sinks_config.get("timescaledb", {}).get("enabled", True):
+        if sinks_config.get("timescaledb", {}).get("enabled", True) and tsdb_writer is not None:
             tsdb_config = sinks_config.get("timescaledb", {})
             db_config = config.get("database", {})
             tsdb_sink = TSDBSink(tsdb_config, writer=tsdb_writer, db_config=db_config)
             self.sinks["tsdb"] = ResilientSink("tsdb", tsdb_sink, tsdb_config)
+        elif sinks_config.get("timescaledb", {}).get("enabled", True):
+            logger.warning("TimescaleDB sink enabled but no writer available, disabling TSDB sink")
 
         # Loki sink
         if sinks_config.get("loki", {}).get("enabled", False):

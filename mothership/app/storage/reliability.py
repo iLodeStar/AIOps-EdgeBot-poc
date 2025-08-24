@@ -79,7 +79,9 @@ class SinkRetryManager:
         self.initial_backoff_ms = config.get('initial_backoff_ms', 1000)  
         self.max_backoff_ms = config.get('max_backoff_ms', 60000)
         self.jitter_factor = config.get('jitter_factor', 0.1)
-        self.timeout_ms = config.get('timeout_ms', 30000)
+        # Reduce default timeout from 30s to 10s for better responsiveness
+        # This prevents long waits during database connectivity issues
+        self.timeout_ms = config.get('timeout_ms', 10000)
         
     def calculate_backoff(self, attempt: int, retry_after: Optional[float] = None) -> float:
         """Calculate backoff time in seconds for given attempt."""
