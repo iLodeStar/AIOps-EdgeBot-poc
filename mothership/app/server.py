@@ -423,9 +423,7 @@ async def get_stats() -> Dict[str, Any]:
         "service": {"uptime": uptime, "version": "1.5.0"},
         "pipeline": {"processors": pipeline_stats},
         "sinks": sink_stats,
-        "database": {
-            "active_connections": active_conns
-        },
+        "database": {"active_connections": active_conns},
     }
 
 
