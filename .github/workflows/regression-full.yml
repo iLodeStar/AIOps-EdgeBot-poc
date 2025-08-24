@@ -156,7 +156,7 @@ jobs:
           START_NS=$(( ( $(date +%s) - 300 ) * 1000000000 ))
           END_NS=$(( $(date +%s) * 1000000000 ))
           curl -sG "http://localhost:3100/loki/api/v1/query_range" \
-            --data-urlencode "query={} |= \"$TEST_ID\"" \
+            --data-urlencode "query={source=\"mothership\"} |= \"$TEST_ID\"" \
             --data-urlencode "start=$START_NS" \
             --data-urlencode "end=$END_NS" \
             --data-urlencode "limit=1000" | tee reports/loki-query.json

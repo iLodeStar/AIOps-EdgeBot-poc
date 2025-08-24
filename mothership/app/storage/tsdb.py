@@ -348,6 +348,17 @@ class TimescaleDBWriter:
             logger.error("Failed to get stats", error=str(e))
             return self.stats.copy()
     
+    def get_active_connections(self) -> int:
+        """Return the number of active connections in the pool (non-negative)."""
+        try:
+            if self.pool:
+                stats = self.pool.get_stats()
+                # Active connections = total - available
+                return max(0, stats.pool_size - stats.pool_available)
+        except Exception:
+            pass
+        return 0
+
     async def health_check(self) -> bool:
         """Perform health check on database connection."""
         try:

@@ -374,9 +374,13 @@ async def health_check() -> HealthResponse:
 @app.get("/metrics")
 async def metrics():
     """Prometheus metrics endpoint."""
-    # Update active connections gauge
-    if app_state.get("tsdb_writer"):
-        mship_active_connections.set(app_state["tsdb_writer"].get_active_connections())
+    # Update active connections gauge safely
+    tsdb = app_state.get("tsdb_writer")
+    if tsdb:
+        try:
+            mship_active_connections.set(tsdb.get_active_connections())
+        except Exception:
+            mship_active_connections.set(0)
 
     return PlainTextResponse(get_metrics_content(), media_type=CONTENT_TYPE_LATEST)
 
@@ -406,16 +410,21 @@ async def get_stats() -> Dict[str, Any]:
             if sink and hasattr(sink, "get_stats"):
                 sink_stats[sink_name] = sink.get_stats()
 
+    # Safe active connections read
+    active_conns = 0
+    tsdb = app_state.get("tsdb_writer")
+    if tsdb:
+        try:
+            active_conns = tsdb.get_active_connections()
+        except Exception:
+            active_conns = 0
+
     return {
         "service": {"uptime": uptime, "version": "1.5.0"},
         "pipeline": {"processors": pipeline_stats},
         "sinks": sink_stats,
         "database": {
-            "active_connections": (
-                app_state.get("tsdb_writer", {}).get_active_connections()
-                if app_state.get("tsdb_writer")
-                else 0
-            )
+            "active_connections": active_conns
         },
     }
 
