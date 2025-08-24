@@ -1,4 +1,4 @@
-name: Full Regression (EdgeBot → Mothership → TSDB + Loki)
+name: Full Regression Test
 
 on:
   workflow_dispatch:
@@ -31,7 +31,6 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=20
-        command: ["-config.file=/etc/loki/local-config.yaml"]
 
     steps:
       - name: Checkout
