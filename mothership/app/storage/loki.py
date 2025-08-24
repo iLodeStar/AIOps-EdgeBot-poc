@@ -172,6 +172,10 @@ class LokiClient:
         
         for key, value in event.items():
             if key in self.SAFE_LABELS and key not in self.HIGH_CARDINALITY_LABELS:
+                # Skip None values
+                if value is None:
+                    continue
+                    
                 # Convert to string and sanitize
                 label_value = str(value).strip()
                 if label_value and len(label_value) <= 1024:  # Reasonable limit
@@ -181,10 +185,10 @@ class LokiClient:
                     if sanitized:
                         labels[key] = sanitized
         
-        # Add default labels if missing
+        # Add default labels if missing or None
         if 'service' not in labels:
             labels['service'] = 'edgebot'
-        if 'source' not in labels:
+        if 'source' not in labels or labels.get('source') in ['None', 'null', '']:
             labels['source'] = 'mothership'
             
         return labels
