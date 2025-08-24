@@ -94,10 +94,19 @@ jobs:
 
       - name: Start Mothership with both sinks (TSDB + Loki)
         env:
+          # Main DB connection (used by TimescaleDBWriter)
           MOTHERSHIP_DB_DSN: postgresql://postgres:postgres@localhost:5432/mothership
+          MOTHERSHIP_LOG_LEVEL: INFO
+          # Loki sink
           LOKI_ENABLED: "true"
           LOKI_URL: http://localhost:3100
-          MOTHERSHIP_LOG_LEVEL: INFO
+          # TSDB sink defaults (not strictly needed for main writer, but keep consistent)
+          TSDB_ENABLED: "true"
+          TSDB_HOST: localhost
+          TSDB_PORT: "5432"
+          TSDB_DATABASE: mothership
+          TSDB_USERNAME: postgres
+          TSDB_PASSWORD: postgres
         run: |
           mkdir -p reports
           nohup bash -lc 'cd mothership && python -m app.server 2>&1 | tee ../reports/mothership-stdout.txt' &
@@ -147,11 +156,20 @@ jobs:
           START_NS=$(( ( $(date +%s) - 300 ) * 1000000000 ))
           END_NS=$(( $(date +%s) * 1000000000 ))
           curl -sG "http://localhost:3100/loki/api/v1/query_range" \
-            --data-urlencode 'query={} |= '"'"$TEST_ID"'"'' \
+            --data-urlencode "query={} |= \"$TEST_ID\"" \
             --data-urlencode "start=$START_NS" \
             --data-urlencode "end=$END_NS" \
             --data-urlencode "limit=1000" | tee reports/loki-query.json
-          MATCHES=$(jq '.data.result | map(.values | map(.[1]) | map(contains(env.TEST_ID)) | any) | any' reports/loki-query.json)
+
+          # Ensure response is JSON; dump a snippet on failure
+          if ! jq -e . >/dev/null 2>&1 < reports/loki-query.json; then
+            echo "Non-JSON response from Loki:" >&2
+            head -c 400 reports/loki-query.json >&2 || true
+            exit 5
+          fi
+
+          MATCHES=$(jq --arg id "$TEST_ID" \
+            '.data.result | map(.values | any(.[1]; contains($id))) | any' reports/loki-query.json)
           if [ "$MATCHES" != "true" ]; then
             echo "Loki did not return the test event"; exit 1
           fi
