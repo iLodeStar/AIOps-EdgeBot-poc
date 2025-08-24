@@ -144,16 +144,30 @@ async def startup_event():
 
         logging.getLogger().setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
-        # Initialize TimescaleDB writer
+        # Initialize TimescaleDB writer with error handling
         db_config = config["database"]
-        tsdb_writer = TimescaleDBWriter(db_config)
-        await tsdb_writer.initialize()
-        app_state["tsdb_writer"] = tsdb_writer
+        tsdb_writer = None
+        try:
+            tsdb_writer = TimescaleDBWriter(db_config)
+            await tsdb_writer.initialize()
+            app_state["tsdb_writer"] = tsdb_writer
+            logger.info("TimescaleDB writer initialized successfully")
+        except Exception as e:
+            logger.error("Failed to initialize TimescaleDB writer", error=str(e))
+            # Continue startup without TSDB writer - sinks manager will handle this gracefully
+            app_state["tsdb_writer"] = None
 
-        # Initialize dual-sink manager with the existing writer
-        sinks_manager = SinksManager(config, tsdb_writer=tsdb_writer)
-        await sinks_manager.start()
-        app_state["sinks_manager"] = sinks_manager
+        # Initialize dual-sink manager with the existing writer (or None if failed)
+        try:
+            sinks_manager = SinksManager(config, tsdb_writer=tsdb_writer)
+            await sinks_manager.start()
+            app_state["sinks_manager"] = sinks_manager
+            logger.info("Sinks manager started successfully")
+        except Exception as e:
+            logger.error("Failed to start sinks manager", error=str(e))
+            # This is more critical - create a minimal sinks manager
+            sinks_manager = SinksManager(config, tsdb_writer=None)
+            app_state["sinks_manager"] = sinks_manager
 
         # Initialize processing pipeline
         pipeline = Pipeline(config["pipeline"])
@@ -328,8 +342,12 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
         mship_requests_total.labels(
             method="POST", endpoint="/ingest", status="500"
         ).inc()
-        logger.error("Unhandled error during ingestion", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        error_msg = f"Ingestion failed: {str(e)}"
+        logger.error("Unhandled error during ingestion", 
+                    error=error_msg, 
+                    exc_info=True,
+                    events_count=len(events) if 'events' in locals() else 0)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/healthz", response_model=HealthResponse)
