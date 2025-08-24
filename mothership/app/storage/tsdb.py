@@ -190,18 +190,20 @@ class TimescaleDBWriter:
         except Exception as e:
             self.stats["total_errors"] += 1
             self.stats["last_error_time"] = time.time()
-            logger.error("Failed to insert events", 
-                        error=str(e), 
-                        count=len(events),
-                        table=self.table_name,
-                        exc_info=True)
+            logger.error(
+                "Failed to insert events",
+                error=str(e),
+                count=len(events),
+                table=self.table_name,
+                exc_info=True,
+            )
             # Add more context about the failure
             if "null value in column" in str(e).lower():
-                logger.error("Database constraint violation - null value detected", 
-                           error=str(e))
+                logger.error(
+                    "Database constraint violation - null value detected", error=str(e)
+                )
             elif "connection" in str(e).lower():
-                logger.error("Database connection failure during insert", 
-                           error=str(e))
+                logger.error("Database connection failure during insert", error=str(e))
             raise
 
     async def insert_single_event(self, event: Dict[str, Any]) -> bool:
