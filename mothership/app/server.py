@@ -257,9 +257,26 @@ async def shutdown_event():
 
 
 @app.post("/ingest", response_model=IngestResponse)
-@mship_ingest_seconds.time()
 async def ingest_events(request: IngestRequest) -> IngestResponse:
     """Ingest events for processing with dual-sink support."""
+    # Safety wrapper to catch any exception that happens before the main try block
+    try:
+        return await _ingest_events_internal(request)
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        logger.error("Critical error in ingest endpoint before main processing", 
+                    error=str(e), exc_info=True)
+        mship_requests_total.labels(
+            method="POST", endpoint="/ingest", status="500"
+        ).inc()
+        raise HTTPException(status_code=500, detail=f"Critical ingestion error: {str(e)}")
+
+
+@mship_ingest_seconds.time()
+async def _ingest_events_internal(request: IngestRequest) -> IngestResponse:
+    """Internal ingest processing with full error handling."""
     start_time = time.time()
 
     try:
@@ -297,7 +314,7 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
                     processed_events.append(processed_event)
                     logger.debug(f"Event processed successfully: {processed_event}")
                 except Exception as e:
-                    logger.error(f"Error processing event: {e}", event=event.model_dump())
+                    logger.error(f"Error processing event: {e}", event=event.model_dump(), exc_info=True)
                     # Continue processing other events instead of failing completely
                     continue
 
@@ -310,8 +327,15 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
             raise HTTPException(status_code=500, detail="SinksManager not initialized")
             
         logger.info(f"Writing {len(processed_events)} events to sinks")
-        sink_results = await sinks_manager.write_events(processed_events)
-        logger.info(f"Sink write results: {sink_results}")
+        
+        # Add additional error handling around sink writes
+        try:
+            sink_results = await sinks_manager.write_events(processed_events)
+            logger.info(f"Sink write results: {sink_results}")
+        except Exception as sink_error:
+            logger.error(f"Critical error during sink write: {sink_error}", exc_info=True)
+            # Return empty results rather than crashing
+            sink_results = {}
 
         # Update metrics as per requirements
         total_written = 0
