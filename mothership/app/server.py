@@ -165,9 +165,18 @@ async def startup_event():
             logger.info("Sinks manager started successfully")
         except Exception as e:
             logger.error("Failed to start sinks manager", error=str(e))
-            # This is more critical - create a minimal sinks manager
-            sinks_manager = SinksManager(config, tsdb_writer=None)
-            app_state["sinks_manager"] = sinks_manager
+            # This is more critical - create a minimal sinks manager and start it
+            try:
+                sinks_manager = SinksManager(config, tsdb_writer=None)
+                await sinks_manager.start()
+                app_state["sinks_manager"] = sinks_manager
+                logger.info("Fallback sinks manager started successfully")
+            except Exception as fallback_error:
+                logger.error("Failed to start fallback sinks manager", error=str(fallback_error))
+                # Create an empty sinks manager as last resort
+                sinks_manager = SinksManager({}, tsdb_writer=None)
+                app_state["sinks_manager"] = sinks_manager
+                logger.warning("Using empty sinks manager as last resort")
 
         # Initialize processing pipeline
         pipeline = Pipeline(config["pipeline"])
