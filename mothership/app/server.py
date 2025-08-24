@@ -264,11 +264,11 @@ async def ingest_events(request: IngestRequest) -> IngestResponse:
             for event in events:
                 try:
                     # Convert to dict for pipeline processing
-                    event_dict = event.dict()
+                    event_dict = event.model_dump()
                     processed_event = await pipeline.process_event(event_dict)
                     processed_events.append(processed_event)
                 except Exception as e:
-                    logger.error(f"Error processing event: {e}", event=event_dict)
+                    logger.error(f"Error processing event: {e}", event=event.model_dump())
                     continue
 
         # Store in dual-sink architecture
