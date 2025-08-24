@@ -199,7 +199,7 @@ class TestMothershipStandalone:
         ingest_url = f"http://localhost:{self.mothership_port}/ingest"
         response = requests.post(
             ingest_url,
-            json={"events": test_events},
+            json={"messages": test_events},
             headers={"Content-Type": "application/json"},
             timeout=15
         )
@@ -208,7 +208,7 @@ class TestMothershipStandalone:
         
         response_data = response.json()
         assert response_data.get('status') == 'success', f"Ingestion not successful: {response_data}"
-        assert response_data.get('events_received') == 3, f"Unexpected event count: {response_data}"
+        assert response_data.get('processed_events') == 3, f"Unexpected event count: {response_data}"
         
         # Wait for processing
         await asyncio.sleep(3)
@@ -258,7 +258,7 @@ class TestMothershipStandalone:
         ingest_url = f"http://localhost:{self.mothership_port}/ingest"
         response = requests.post(
             ingest_url,
-            json={"events": test_events},
+            json={"messages": test_events},
             timeout=15
         )
         
@@ -316,7 +316,7 @@ class TestMothershipStandalone:
         ingest_url = f"http://localhost:{self.mothership_port}/ingest"
         response = requests.post(
             ingest_url,
-            json={"events": test_events},
+            json={"messages": test_events},
             timeout=15
         )
         
@@ -392,7 +392,7 @@ class TestMothershipStandalone:
         
         response = requests.post(
             ingest_url,
-            json={"events": invalid_events},
+            json={"messages": invalid_events},
             timeout=10
         )
         
@@ -437,14 +437,14 @@ class TestMothershipStandalone:
         ingest_url = f"http://localhost:{self.mothership_port}/ingest"
         response = requests.post(
             ingest_url,
-            json={"events": test_events},
+            json={"messages": test_events},
             timeout=30  # Longer timeout for large batch
         )
         
         assert response.status_code == 200, f"Batch ingestion failed: {response.text}"
         
         response_data = response.json()
-        assert response_data.get('events_received') == batch_size, f"Not all events received: {response_data}"
+        assert response_data.get('processed_events') == batch_size, f"Not all events received: {response_data}"
         
         # Wait for processing
         await asyncio.sleep(10)
