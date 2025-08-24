@@ -144,17 +144,35 @@ async def startup_event():
 
         logging.getLogger().setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
-        # Initialize TimescaleDB writer with error handling
-        db_config = config["database"]
+        # Initialize TimescaleDB writer only if TSDB sink is enabled
+        enabled_sinks = config_manager.get_enabled_sinks()
         tsdb_writer = None
-        try:
-            tsdb_writer = TimescaleDBWriter(db_config)
-            await tsdb_writer.initialize()
-            app_state["tsdb_writer"] = tsdb_writer
-            logger.info("TimescaleDB writer initialized successfully")
-        except Exception as e:
-            logger.error("Failed to initialize TimescaleDB writer", error=str(e))
-            # Continue startup without TSDB writer - sinks manager will handle this gracefully
+        
+        if 'timescaledb' in enabled_sinks:
+            # Initialize TimescaleDB writer with error handling
+            db_config = config["database"]
+            try:
+                # Set shorter connection timeout for CI environments
+                db_config = dict(db_config)  # Make a copy to avoid mutating original
+                if "connection_timeout" not in db_config:
+                    db_config["connection_timeout"] = 10  # Reduced from default 30 seconds
+                
+                tsdb_writer = TimescaleDBWriter(db_config)
+                
+                # Use asyncio.wait_for to enforce a maximum total initialization time
+                await asyncio.wait_for(tsdb_writer.initialize(), timeout=15.0)
+                
+                app_state["tsdb_writer"] = tsdb_writer
+                logger.info("TimescaleDB writer initialized successfully")
+            except asyncio.TimeoutError:
+                logger.warning("TimescaleDB initialization timed out, continuing without TSDB")
+                app_state["tsdb_writer"] = None
+            except Exception as e:
+                logger.error("Failed to initialize TimescaleDB writer", error=str(e))
+                # Continue startup without TSDB writer - sinks manager will handle this gracefully
+                app_state["tsdb_writer"] = None
+        else:
+            logger.info("TimescaleDB sink disabled, skipping TSDB writer initialization")
             app_state["tsdb_writer"] = None
 
         # Initialize dual-sink manager with the existing writer (or None if failed)
