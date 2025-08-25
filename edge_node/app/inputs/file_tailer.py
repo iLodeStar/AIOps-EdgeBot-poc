@@ -4,6 +4,7 @@
 - Handles rotations (inode change) and truncation
 - Emits one message per line with file metadata
 """
+
 import asyncio
 import os
 import glob
@@ -28,11 +29,11 @@ class FileTailer:
         self.config = config
         self.message_callback = message_callback
         self.running = False
-        self.scan_interval = int(config.get('scan_interval', 2))
-        self.read_chunk = int(config.get('read_chunk', 8192))
-        self.from_beginning = bool(config.get('from_beginning', False))
-        self.paths: List[str] = list(config.get('paths', []))
-        self.globs: List[str] = list(config.get('globs', []))
+        self.scan_interval = int(config.get("scan_interval", 2))
+        self.read_chunk = int(config.get("read_chunk", 8192))
+        self.from_beginning = bool(config.get("from_beginning", False))
+        self.paths: List[str] = list(config.get("paths", []))
+        self.globs: List[str] = list(config.get("globs", []))
         self._tail_states: Dict[str, _TailState] = {}
         self._task: Optional[asyncio.Task] = None
 
@@ -42,7 +43,7 @@ class FileTailer:
             logger.info("FileTailer: added path", path=path)
 
     async def start(self):
-        if not self.config.get('enabled', False):
+        if not self.config.get("enabled", False):
             logger.info("FileTailer disabled")
             return
         self.running = True
@@ -71,11 +72,11 @@ class FileTailer:
 
     def get_status(self) -> Dict[str, Any]:
         return {
-            'enabled': self.config.get('enabled', False),
-            'running': self.running,
-            'files_tailed': len(self._tail_states),
-            'paths': self.paths,
-            'globs': self.globs,
+            "enabled": self.config.get("enabled", False),
+            "running": self.running,
+            "files_tailed": len(self._tail_states),
+            "paths": self.paths,
+            "globs": self.globs,
         }
 
     async def _run(self):
@@ -111,7 +112,7 @@ class FileTailer:
             if p in self._tail_states:
                 continue
             try:
-                fh = open(p, 'r', encoding='utf-8', errors='replace')
+                fh = open(p, "r", encoding="utf-8", errors="replace")
                 inode = os.fstat(fh.fileno()).st_ino
                 self._tail_states[p] = _TailState(p, fh, inode, 0)
                 logger.info("Tailing file", path=p)
@@ -129,8 +130,10 @@ class FileTailer:
                         st.fh.close()
                     except Exception:
                         pass
-                    fh = open(p, 'r', encoding='utf-8', errors='replace')
-                    self._tail_states[p] = _TailState(p, fh, os.fstat(fh.fileno()).st_ino, 0)
+                    fh = open(p, "r", encoding="utf-8", errors="replace")
+                    self._tail_states[p] = _TailState(
+                        p, fh, os.fstat(fh.fileno()).st_ino, 0
+                    )
                     logger.info("Reopened rotated file", path=p)
             except FileNotFoundError:
                 to_remove.append(p)
@@ -154,20 +157,20 @@ class FileTailer:
                     if not line:
                         break
                     st.position = st.fh.tell()
-                    line = line.rstrip('\n')
+                    line = line.rstrip("\n")
                     if not line:
                         continue
                     msg = {
-                        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                        'type': 'log',
-                        'file_path': p,
-                        'message': line,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "type": "log",
+                        "file_path": p,
+                        "message": line,
                     }
                     # Best-effort service labeling for common paths
-                    if '/nginx/' in p or p.endswith('access.log'):
-                        msg['service'] = 'web'
-                    elif 'dns' in p or 'unbound' in p or 'bind' in p:
-                        msg['service'] = 'dns'
+                    if "/nginx/" in p or p.endswith("access.log"):
+                        msg["service"] = "web"
+                    elif "dns" in p or "unbound" in p or "bind" in p:
+                        msg["service"] = "dns"
                     await self.message_callback(msg)
             except Exception as e:
                 logger.debug("Tail read error", path=p, error=str(e))

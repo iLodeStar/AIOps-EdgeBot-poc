@@ -22,10 +22,37 @@ Documentation
 - docs/ARCHITECTURE.md — Design and architecture overview
 - docs/DECISIONS.md — Framework and design decisions
 - docs/USER_GUIDE.md — Using EdgeBot (receiving data, inspecting outputs)
+- docs/OPTIONAL_SERVICES.md — **Beginner-friendly guide** for enabling optional services (Ollama LLM, Grafana, monitoring)
+- docs/LLM_OFFLINE.md — Complete offline LLM setup with Ollama for AI-powered log analysis
 - docs/LOKI_GRAFANA_SETUP.md — Configure Loki log aggregation with Grafana visualization
 
 Need help?
 - Open an issue in this repository with details of your environment and what you tried.
+
+## Quick Links
+
+### Service Dashboards & Health Checks
+Once EdgeBot is running, access these local service endpoints:
+
+**Core Services:**
+- EdgeBot Health: [http://localhost:8081/healthz](http://localhost:8081/healthz)
+- EdgeBot Metrics: [http://localhost:8081/metrics](http://localhost:8081/metrics)  
+- Mothership API: [http://localhost:8443](http://localhost:8443)
+
+**Optional Services** (see [docs/OPTIONAL_SERVICES.md](docs/OPTIONAL_SERVICES.md) for setup):
+- Grafana Dashboard: [http://localhost:3000](http://localhost:3000) (admin/admin)
+- Prometheus Metrics: [http://localhost:9090](http://localhost:9090)
+- Loki Logs: [http://localhost:3100](http://localhost:3100)
+- Ollama LLM API: [http://localhost:11434](http://localhost:11434)
+
+**External Resources:**
+- [Ollama Model Library](https://ollama.com/library) - Browse available LLM models
+- [Grafana Dashboard Gallery](https://grafana.com/grafana/dashboards/) - Pre-built dashboards
+
+### Troubleshooting
+- **Docker build issues?** Check [docs/OPTIONAL_SERVICES.md#troubleshooting](docs/OPTIONAL_SERVICES.md#troubleshooting) 
+- **Services not starting?** Run health check script in the optional services guide
+- **Need beginner help?** Start with [docs/OPTIONAL_SERVICES.md](docs/OPTIONAL_SERVICES.md)
 
 ## Phase 1 Implementation
 
