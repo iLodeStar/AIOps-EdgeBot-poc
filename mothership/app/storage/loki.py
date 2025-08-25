@@ -117,6 +117,17 @@ class LokiClient:
             if should_flush:
                 flush_result = await self._flush_batch()
                 written = flush_result.get("written", 0)
+                # Include flush errors in the total error count
+                flush_errors = flush_result.get("errors", 0)
+                errors += flush_errors
+                
+                # If flush failed but we had queued events, adjust counts appropriately
+                # In CI environment, we attempted immediate flush, so queued count should be
+                # reduced by the number of events that were attempted to be flushed
+                if flush_errors > 0 and written == 0:
+                    # Failed to flush any events, but they were attempted
+                    logger.warning("Failed to flush events to Loki in CI environment", 
+                                 attempted=flush_errors, queued_before_flush=queued)
         
         return {"written": written, "queued": queued, "errors": errors}
     
