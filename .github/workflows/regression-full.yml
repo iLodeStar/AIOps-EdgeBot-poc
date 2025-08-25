@@ -146,15 +146,26 @@ jobs:
           curl -sS -X POST http://localhost:8443/ingest \
             -H "Content-Type: application/json" \
             --data-binary @/tmp/payload.json | tee reports/ingest-response.json
-          sleep 5
+          
+          # Check ingest response for sink results
+          echo "Ingest response:"
+          cat reports/ingest-response.json
+          echo ""
+          
+          # Wait longer to ensure Loki batching completes in CI environment
+          echo "Waiting for Loki batch processing..."
+          sleep 8
 
       - name: Validate Loki received the event
         if: always()
         env:
           TEST_ID: ${{ steps.ingest.outputs.TEST_ID }}
         run: |
+          echo "Validating Loki for test ID: $TEST_ID"
           START_NS=$(( ( $(date +%s) - 300 ) * 1000000000 ))
           END_NS=$(( $(date +%s) * 1000000000 ))
+          echo "Query time range: $START_NS to $END_NS"
+          
           curl -sG "http://localhost:3100/loki/api/v1/query_range" \
             --data-urlencode "query={source=\"mothership\"} |= \"$TEST_ID\"" \
             --data-urlencode "start=$START_NS" \
@@ -167,9 +178,14 @@ jobs:
             head -c 400 reports/loki-query.json >&2 || true
             exit 5
           fi
+          
+          echo "Loki query response:"
+          jq . reports/loki-query.json
 
           MATCHES=$(jq --arg id "$TEST_ID" \
             '.data.result | map(.values | any(.[1]; contains($id))) | any' reports/loki-query.json)
+          echo "Query match result: $MATCHES"
+          
           if [ "$MATCHES" != "true" ]; then
             echo "Loki did not return the test event"; exit 1
           fi

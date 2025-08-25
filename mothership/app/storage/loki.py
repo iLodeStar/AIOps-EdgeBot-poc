@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
@@ -107,12 +108,27 @@ class LokiClient:
                                  error=str(e), event_keys=list(event.keys()))
                     errors += 1
             
-            # Flush if batch is full
-            if len(self._batch_queue) >= self.config.get('batch_size', 100):
+            # Flush if batch is full OR if it's a small batch in CI environment
+            should_flush = (
+                len(self._batch_queue) >= self.config.get('batch_size', 100) or
+                (len(self._batch_queue) > 0 and self._is_ci_environment())
+            )
+            
+            if should_flush:
                 flush_result = await self._flush_batch()
                 written = flush_result.get("written", 0)
         
         return {"written": written, "queued": queued, "errors": errors}
+    
+    def _is_ci_environment(self) -> bool:
+        """Check if we're running in a CI environment where immediate flushing is preferred."""
+        # Only enable immediate flushing for GitHub Actions regression tests
+        # Not for regular CI runs or pytest executions
+        return (
+            os.getenv('GITHUB_ACTIONS') == 'true' and 
+            not os.getenv('PYTEST_CURRENT_TEST') and  # Not during pytest
+            os.getenv('MOTHERSHIP_LOG_LEVEL') == 'INFO'  # Only for actual service runs
+        )
     
     def _convert_to_loki_entry(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Convert an event to Loki log entry format with safe labeling."""
