@@ -5,10 +5,11 @@ from pathlib import Path
 import sys
 
 # Add the app directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 try:
     from inputs.flows_listener import FlowsListener
+
     FLOWS_AVAILABLE = True
 except Exception:
     FLOWS_AVAILABLE = False
@@ -26,7 +27,12 @@ class TestFlowsListener(unittest.IsolatedAsyncioTestCase):
         self.cb = cb
         self.port = self._free_udp_port()
         self.listener = FlowsListener(
-            {"enabled": True, "netflow_ports": [self.port], "ipfix_ports": [], "sflow_ports": []},
+            {
+                "enabled": True,
+                "netflow_ports": [self.port],
+                "ipfix_ports": [],
+                "sflow_ports": [],
+            },
             self.cb,
         )
 

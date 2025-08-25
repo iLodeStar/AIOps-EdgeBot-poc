@@ -3,10 +3,11 @@ from pathlib import Path
 import sys
 
 # Add the app directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 try:
     from main import HealthServer
+
     HEALTH_AVAILABLE = True
 except Exception:
     HEALTH_AVAILABLE = False
@@ -29,7 +30,14 @@ class TestHealthMetrics(unittest.IsolatedAsyncioTestCase):
             self.skipTest("HealthServer not importable (aiohttp missing?)")
         self.services = {"dummy": DummyService()}
         self.server = HealthServer(
-            {"observability": {"health_port": 0, "metrics_path": "/metrics", "health_path": "/healthz"}, "server": {"host": "127.0.0.1", "port": 0}},
+            {
+                "observability": {
+                    "health_port": 0,
+                    "metrics_path": "/metrics",
+                    "health_path": "/healthz",
+                },
+                "server": {"host": "127.0.0.1", "port": 0},
+            },
             self.services,
         )
 

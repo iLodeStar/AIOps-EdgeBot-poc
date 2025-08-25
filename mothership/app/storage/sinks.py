@@ -122,7 +122,10 @@ class SinksManager:
         sink_defaults = config.get("sink_defaults", {})
 
         # TimescaleDB sink using the provided writer (from app startup) if available
-        if sinks_config.get("timescaledb", {}).get("enabled", True) and tsdb_writer is not None:
+        if (
+            sinks_config.get("timescaledb", {}).get("enabled", True)
+            and tsdb_writer is not None
+        ):
             tsdb_config = sinks_config.get("timescaledb", {})
             # Merge defaults into tsdb config
             tsdb_config = self._merge_sink_config(sink_defaults, tsdb_config)
@@ -130,7 +133,9 @@ class SinksManager:
             tsdb_sink = TSDBSink(tsdb_config, writer=tsdb_writer, db_config=db_config)
             self.sinks["tsdb"] = ResilientSink("tsdb", tsdb_sink, tsdb_config)
         elif sinks_config.get("timescaledb", {}).get("enabled", True):
-            logger.warning("TimescaleDB sink enabled but no writer available, disabling TSDB sink")
+            logger.warning(
+                "TimescaleDB sink enabled but no writer available, disabling TSDB sink"
+            )
 
         # Loki sink
         if sinks_config.get("loki", {}).get("enabled", False):
@@ -140,48 +145,67 @@ class SinksManager:
             loki_sink = LokiSink(loki_config)
             self.sinks["loki"] = ResilientSink("loki", loki_sink, loki_config)
 
-    def _merge_sink_config(self, defaults: Dict[str, Any], sink_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_sink_config(
+        self, defaults: Dict[str, Any], sink_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Merge sink defaults with sink-specific config."""
         merged = sink_config.copy()
-        
+
         # Apply defaults for retry configuration
         if "retry" not in merged:
             merged["retry"] = {}
         merged["retry"].setdefault("enabled", True)
         merged["retry"].setdefault("max_retries", defaults.get("max_retries", 2))
-        merged["retry"].setdefault("initial_backoff_ms", defaults.get("initial_backoff_ms", 100))
-        merged["retry"].setdefault("max_backoff_ms", defaults.get("max_backoff_ms", 2000))
+        merged["retry"].setdefault(
+            "initial_backoff_ms", defaults.get("initial_backoff_ms", 100)
+        )
+        merged["retry"].setdefault(
+            "max_backoff_ms", defaults.get("max_backoff_ms", 2000)
+        )
         merged["retry"].setdefault("jitter_factor", defaults.get("jitter_factor", 0.1))
-        
+
         # Use longer timeout for CI environments to handle Loki startup delays
         import os
+
         is_ci = (
-            os.getenv('GITHUB_ACTIONS') == 'true' and 
-            not os.getenv('PYTEST_CURRENT_TEST') and
-            os.getenv('MOTHERSHIP_LOG_LEVEL') == 'INFO'
+            os.getenv("GITHUB_ACTIONS") == "true"
+            and not os.getenv("PYTEST_CURRENT_TEST")
+            and os.getenv("MOTHERSHIP_LOG_LEVEL") == "INFO"
         )
         default_timeout = 20000 if is_ci else 1000  # 20s for CI, 1s for others
-        logger.debug("Timeout configuration", is_ci=is_ci, default_timeout=default_timeout,
-                   github_actions=os.getenv('GITHUB_ACTIONS'),
-                   pytest_test=os.getenv('PYTEST_CURRENT_TEST'),
-                   log_level=os.getenv('MOTHERSHIP_LOG_LEVEL'),
-                   defaults_timeout=defaults.get("timeout_ms"),
-                   sink_config_timeout=sink_config.get("timeout_ms"))
-        
+        logger.debug(
+            "Timeout configuration",
+            is_ci=is_ci,
+            default_timeout=default_timeout,
+            github_actions=os.getenv("GITHUB_ACTIONS"),
+            pytest_test=os.getenv("PYTEST_CURRENT_TEST"),
+            log_level=os.getenv("MOTHERSHIP_LOG_LEVEL"),
+            defaults_timeout=defaults.get("timeout_ms"),
+            sink_config_timeout=sink_config.get("timeout_ms"),
+        )
+
         # Force the timeout for CI environments regardless of defaults
         if is_ci:
             merged["retry"]["timeout_ms"] = default_timeout
         else:
-            merged["retry"].setdefault("timeout_ms", defaults.get("timeout_ms", default_timeout))
-        
+            merged["retry"].setdefault(
+                "timeout_ms", defaults.get("timeout_ms", default_timeout)
+            )
+
         # Apply defaults for circuit breaker configuration
         if "circuit_breaker" not in merged:
             merged["circuit_breaker"] = {}
         merged["circuit_breaker"].setdefault("enabled", True)
-        merged["circuit_breaker"].setdefault("failure_threshold", defaults.get("failure_threshold", 3))
-        merged["circuit_breaker"].setdefault("open_duration_sec", defaults.get("open_duration_sec", 30))
-        merged["circuit_breaker"].setdefault("half_open_max_inflight", defaults.get("half_open_max_inflight", 1))
-        
+        merged["circuit_breaker"].setdefault(
+            "failure_threshold", defaults.get("failure_threshold", 3)
+        )
+        merged["circuit_breaker"].setdefault(
+            "open_duration_sec", defaults.get("open_duration_sec", 30)
+        )
+        merged["circuit_breaker"].setdefault(
+            "half_open_max_inflight", defaults.get("half_open_max_inflight", 1)
+        )
+
         return merged
 
     async def start(self):
@@ -193,12 +217,14 @@ class SinksManager:
 
         if start_tasks:
             results = await asyncio.gather(*start_tasks, return_exceptions=True)
-            
+
             # Check for exceptions in sink startup
             for i, result in enumerate(results):
                 sink_name = list(self.sinks.keys())[i]
                 if isinstance(result, Exception):
-                    logger.error("Failed to start sink", sink=sink_name, error=str(result))
+                    logger.error(
+                        "Failed to start sink", sink=sink_name, error=str(result)
+                    )
                     # Don't raise here, but log the failure for debugging
                 else:
                     logger.info("Sink started successfully", sink=sink_name)

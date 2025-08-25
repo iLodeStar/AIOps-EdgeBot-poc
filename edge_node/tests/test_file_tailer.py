@@ -6,10 +6,11 @@ from pathlib import Path
 import sys
 
 # Add the app directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 try:
     from inputs.file_tailer import FileTailer
+
     FILETAILER_AVAILABLE = True
 except Exception:
     FILETAILER_AVAILABLE = False

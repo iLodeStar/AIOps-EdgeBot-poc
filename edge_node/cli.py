@@ -14,7 +14,8 @@ sys.path.insert(0, str(current_dir))
 # Import and run the main function
 try:
     from app.main import main
-    if __name__ == '__main__':
+
+    if __name__ == "__main__":
         main()
 except ImportError as e:
     print(f"Failed to import EdgeBot modules: {e}")

@@ -4,6 +4,7 @@
 - Checks for common log file locations (nginx, bind, unbound, dnsmasq, captive portal)
 - Emits inventory messages and can register discovered files with FileTailer
 """
+
 import asyncio
 import os
 import shlex
@@ -31,10 +32,10 @@ class ServiceDiscovery:
         self.tailer = tailer  # optional reference to FileTailer for auto-registration
         self.running = False
         self.task: Optional[asyncio.Task] = None
-        self.interval = int(config.get('interval', 300))
+        self.interval = int(config.get("interval", 300))
 
     async def start(self):
-        if not self.config.get('enabled', False):
+        if not self.config.get("enabled", False):
             logger.info("Service discovery disabled")
             return
         self.running = True
@@ -56,9 +57,9 @@ class ServiceDiscovery:
 
     def get_status(self) -> Dict[str, Any]:
         return {
-            'enabled': self.config.get('enabled', False),
-            'running': self.running,
-            'interval': self.interval,
+            "enabled": self.config.get("enabled", False),
+            "running": self.running,
+            "interval": self.interval,
         }
 
     async def _run(self):
@@ -76,18 +77,18 @@ class ServiceDiscovery:
         services = self._discover_listeners()
         logs = self._discover_logs()
         msg = {
-            'type': 'host_service_inventory',
-            'listeners': services,
-            'log_candidates': logs,
+            "type": "host_service_inventory",
+            "listeners": services,
+            "log_candidates": logs,
         }
         await self.message_callback(msg)
-        if self.tailer and self.config.get('auto_tail_logs', True):
+        if self.tailer and self.config.get("auto_tail_logs", True):
             for p in logs:
                 self.tailer.add_path(p)
 
     def _discover_listeners(self) -> List[Dict[str, Any]]:
         try:
-            cmd = shlex.split('ss -tulpn')
+            cmd = shlex.split("ss -tulpn")
             out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
             lines = out.splitlines()[1:]
             results = []
@@ -98,8 +99,8 @@ class ServiceDiscovery:
                     continue
                 proto = parts[0]
                 local = parts[4]
-                proc = parts[-1] if parts[-1].startswith('users:') else None
-                results.append({'proto': proto, 'local': local, 'proc': proc})
+                proc = parts[-1] if parts[-1].startswith("users:") else None
+                results.append({"proto": proto, "local": local, "proc": proc})
             return results
         except Exception as e:
             logger.debug("ss not available", error=str(e))
@@ -107,7 +108,7 @@ class ServiceDiscovery:
 
     def _discover_logs(self) -> List[str]:
         found = []
-        for p in COMMON_LOGS + self.config.get('extra_logs', []):
+        for p in COMMON_LOGS + self.config.get("extra_logs", []):
             try:
                 if os.path.isfile(p) and os.access(p, os.R_OK):
                     found.append(p)

@@ -5,10 +5,11 @@ from pathlib import Path
 import sys
 
 # Add the app directory to the path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'app'))
+sys.path.insert(0, str(Path(__file__).parent.parent / "app"))
 
 try:
     from inputs.nmea_listener import NMEAListener
+
     NMEA_AVAILABLE = True
 except Exception:
     NMEA_AVAILABLE = False
@@ -26,7 +27,12 @@ class TestNMEAListener(unittest.IsolatedAsyncioTestCase):
         self.cb = cb
         self.port = self._free_udp_port()
         self.listener = NMEAListener(
-            {"enabled": True, "mode": "udp", "bind_address": "127.0.0.1", "udp_port": self.port},
+            {
+                "enabled": True,
+                "mode": "udp",
+                "bind_address": "127.0.0.1",
+                "udp_port": self.port,
+            },
             self.cb,
         )
 

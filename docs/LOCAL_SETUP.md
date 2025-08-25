@@ -331,6 +331,31 @@ curl -s http://localhost:8443/stats | jq .
 
 ## Optional: Enable Advanced Features
 
+### Quick Start for Optional Services
+
+For a comprehensive guide to enabling and using optional services, see **[docs/OPTIONAL_SERVICES.md](OPTIONAL_SERVICES.md)**
+
+**Quick Enable Options:**
+```bash
+# Enable observability stack (Grafana + Prometheus + Loki)
+docker compose -f compose.observability.yml up -d
+
+# Enable local LLM processing
+docker compose up -d ollama
+docker compose exec ollama ollama pull llama3.1:8b-instruct-q4_0
+
+# Health check all services
+curl -f http://localhost:8081/healthz  # EdgeBot
+curl -f http://localhost:3000/api/health  # Grafana  
+curl -f http://localhost:11434/api/tags  # Ollama
+```
+
+**Service Dashboard Links:**
+- EdgeBot: [http://localhost:8081/healthz](http://localhost:8081/healthz)
+- Grafana: [http://localhost:3000](http://localhost:3000) (admin/admin)
+- Prometheus: [http://localhost:9090](http://localhost:9090)
+- Ollama: [http://localhost:11434](http://localhost:11434)
+
 ### LLM Offline Processing
 
 If you want to enable LLM features (requires additional setup):

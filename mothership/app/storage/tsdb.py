@@ -25,7 +25,9 @@ class TimescaleDBWriter:
         self.dsn = self._build_dsn()
         self.pool_min_size = config.get("pool_min_size", 5)
         self.pool_max_size = config.get("pool_max_size", 20)
-        self.connection_timeout = config.get("connection_timeout", 10)  # Reduced from 30 to 10 seconds
+        self.connection_timeout = config.get(
+            "connection_timeout", 10
+        )  # Reduced from 30 to 10 seconds
 
         # Table configuration
         self.table_name = config.get("table_name", "events")
