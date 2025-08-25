@@ -141,6 +141,62 @@ class LokiClient:
             os.getenv('MOTHERSHIP_LOG_LEVEL') == 'INFO'  # Only for actual service runs
         )
     
+    async def _wait_for_loki_ready(self, max_attempts: int = 15) -> bool:
+        """Wait for Loki to be ready for ingestion in CI environments."""
+        if not self._is_ci_environment():
+            return True  # Skip readiness check in non-CI environments
+            
+        ready_url = f"{self.config.get('url', 'http://localhost:3100').rstrip('/')}/ready"
+        push_url = f"{self.config.get('url', 'http://localhost:3100').rstrip('/')}/loki/api/v1/push"
+        
+        # Test both readiness endpoint and a test push to ensure Loki is truly ready
+        test_payload = {
+            "streams": [
+                {
+                    "stream": {"test": "readiness"},
+                    "values": [["1000000000000000000", "readiness test"]]
+                }
+            ]
+        }
+        
+        for attempt in range(max_attempts):
+            try:
+                if self.client:
+                    # First check readiness endpoint
+                    ready_response = await self.client.get(ready_url, timeout=3.0)
+                    if ready_response.status_code != 200:
+                        logger.debug("Loki /ready endpoint not ready", attempt=attempt, status=ready_response.status_code)
+                        continue
+                    
+                    # Then test actual push endpoint with small test payload
+                    push_response = await self.client.post(push_url, json=test_payload, timeout=3.0)
+                    if push_response.status_code == 204:
+                        logger.debug("Loki push endpoint confirmed ready", attempt=attempt)
+                        return True
+                    else:
+                        logger.debug("Loki push endpoint not ready", attempt=attempt, status=push_response.status_code)
+                
+                else:
+                    # If client not initialized, try with a temporary client
+                    async with httpx.AsyncClient(timeout=3.0) as temp_client:
+                        ready_response = await temp_client.get(ready_url)
+                        if ready_response.status_code != 200:
+                            continue
+                            
+                        push_response = await temp_client.post(push_url, json=test_payload)
+                        if push_response.status_code == 204:
+                            logger.debug("Loki push endpoint confirmed ready", attempt=attempt)
+                            return True
+                            
+            except Exception as e:
+                logger.debug("Loki readiness check failed", attempt=attempt, error=str(e))
+            
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(0.5)  # Wait 500ms between attempts
+                
+        logger.warning("Loki readiness check failed after all attempts", max_attempts=max_attempts)
+        return False
+    
     def _convert_to_loki_entry(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Convert an event to Loki log entry format with safe labeling."""
         try:
@@ -261,6 +317,13 @@ class LokiClient:
         if not self.client or not entries:
             return {"written": 0, "errors": len(entries)}
         
+        # In CI environment, wait for Loki to be ready before attempting to send
+        if self._is_ci_environment():
+            loki_ready = await self._wait_for_loki_ready()
+            if not loki_ready:
+                logger.error("Loki not ready in CI environment, cannot send entries")
+                return {"written": 0, "errors": len(entries)}
+        
         # Group entries by labels
         streams = {}
         for entry in entries:
@@ -280,33 +343,45 @@ class LokiClient:
             "streams": list(streams.values())
         }
         
-        # Send to Loki with retries
+        # Send to Loki with retries and improved error handling
         last_error = None
-        for attempt in range(self.config.get('max_retries', 3) + 1):
+        max_retries = self.config.get('max_retries', 3)
+        
+        for attempt in range(max_retries + 1):
             try:
                 url = f"{self.config.get('url', 'http://localhost:3100').rstrip('/')}/loki/api/v1/push"
-                response = await self.client.post(url, json=payload)
+                
+                # Use longer timeout for CI environments to handle potential network delays
+                timeout = 10.0 if self._is_ci_environment() else self.config.get('timeout_seconds', 30.0)
+                
+                response = await self.client.post(url, json=payload, timeout=timeout)
                 
                 if response.status_code == 204:
                     logger.debug("Batch sent to Loki successfully",
                                entries=len(entries), streams=len(streams), attempt=attempt)
                     return {"written": len(entries), "errors": 0}
                 else:
+                    error_msg = f"Unexpected status {response.status_code}"
+                    if response.text:
+                        error_msg += f": {response.text}"
                     raise httpx.HTTPStatusError(
-                        f"Unexpected status {response.status_code}", 
+                        error_msg,
                         request=response.request, 
                         response=response
                     )
                     
             except Exception as e:
                 last_error = e
-                if attempt < self.config.get('max_retries', 3):
-                    backoff = self.config.get('retry_backoff_seconds', 1.0) * (2 ** attempt)
+                if attempt < max_retries:
+                    # Use exponential backoff with jitter for better reliability
+                    base_backoff = self.config.get('retry_backoff_seconds', 1.0)
+                    backoff = base_backoff * (2 ** attempt) + (0.1 * attempt)  # Add jitter
                     logger.warning("Loki request failed, retrying",
                                  attempt=attempt, backoff=backoff, error=str(e))
                     await asyncio.sleep(backoff)
                 else:
                     logger.error("Loki request failed after all retries",
-                               attempts=attempt + 1, error=str(e))
+                               attempts=attempt + 1, error=str(e), last_error=str(last_error))
         
+        # All retries failed
         return {"written": 0, "errors": len(entries)}

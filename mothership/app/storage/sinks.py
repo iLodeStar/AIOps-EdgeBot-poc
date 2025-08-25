@@ -152,7 +152,27 @@ class SinksManager:
         merged["retry"].setdefault("initial_backoff_ms", defaults.get("initial_backoff_ms", 100))
         merged["retry"].setdefault("max_backoff_ms", defaults.get("max_backoff_ms", 2000))
         merged["retry"].setdefault("jitter_factor", defaults.get("jitter_factor", 0.1))
-        merged["retry"].setdefault("timeout_ms", defaults.get("timeout_ms", 1000))
+        
+        # Use longer timeout for CI environments to handle Loki startup delays
+        import os
+        is_ci = (
+            os.getenv('GITHUB_ACTIONS') == 'true' and 
+            not os.getenv('PYTEST_CURRENT_TEST') and
+            os.getenv('MOTHERSHIP_LOG_LEVEL') == 'INFO'
+        )
+        default_timeout = 20000 if is_ci else 1000  # 20s for CI, 1s for others
+        logger.debug("Timeout configuration", is_ci=is_ci, default_timeout=default_timeout,
+                   github_actions=os.getenv('GITHUB_ACTIONS'),
+                   pytest_test=os.getenv('PYTEST_CURRENT_TEST'),
+                   log_level=os.getenv('MOTHERSHIP_LOG_LEVEL'),
+                   defaults_timeout=defaults.get("timeout_ms"),
+                   sink_config_timeout=sink_config.get("timeout_ms"))
+        
+        # Force the timeout for CI environments regardless of defaults
+        if is_ci:
+            merged["retry"]["timeout_ms"] = default_timeout
+        else:
+            merged["retry"].setdefault("timeout_ms", defaults.get("timeout_ms", default_timeout))
         
         # Apply defaults for circuit breaker configuration
         if "circuit_breaker" not in merged:
