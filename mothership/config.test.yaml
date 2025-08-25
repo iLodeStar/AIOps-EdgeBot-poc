@@ -1,0 +1,54 @@
+# Test configuration for mothership without database dependency
+server:
+  host: "0.0.0.0"
+  port: 8443
+
+# Database configuration - disabled for CI/test
+database:
+  dsn: "postgresql://mothership:mothership@localhost:5432/mothership"
+  pool_min_size: 1
+  pool_max_size: 2
+  connection_timeout: 10
+
+# Processing pipeline configuration
+pipeline:
+  processors:
+    redaction:
+      enabled: true
+      drop_fields:
+        - "password"
+        - "secret"
+      mask_patterns:
+        - "password\\s*[=:]\\s*\\S+"
+      mask_char: "*"
+      mask_length: 8
+      hash_fields: []
+      salt: "test-salt"
+      hash_algorithm: "sha256"
+      preserve_original: false
+    
+    enrichment:
+      enabled: true
+      add_tags:
+        processed_by: "mothership-test"
+        version: "1.5"
+      severity_mapping:
+        error: 3
+        warning: 4
+        info: 6
+
+# LLM disabled for testing
+llm:
+  enabled: false
+
+# Storage sinks configuration - both disabled for CI testing
+sinks:
+  timescaledb:
+    enabled: false  # Disabled for CI
+  loki:
+    enabled: false  # Disabled for CI
+
+# Logging configuration
+logging:
+  level: "DEBUG"
+  structured: true

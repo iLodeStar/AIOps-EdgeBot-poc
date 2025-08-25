@@ -119,10 +119,13 @@ class SinksManager:
         self.sinks: Dict[str, ResilientSink] = {}
 
         sinks_config = config.get("sinks", {})
+        sink_defaults = config.get("sink_defaults", {})
 
         # TimescaleDB sink using the provided writer (from app startup) if available
         if sinks_config.get("timescaledb", {}).get("enabled", True) and tsdb_writer is not None:
             tsdb_config = sinks_config.get("timescaledb", {})
+            # Merge defaults into tsdb config
+            tsdb_config = self._merge_sink_config(sink_defaults, tsdb_config)
             db_config = config.get("database", {})
             tsdb_sink = TSDBSink(tsdb_config, writer=tsdb_writer, db_config=db_config)
             self.sinks["tsdb"] = ResilientSink("tsdb", tsdb_sink, tsdb_config)
@@ -132,8 +135,34 @@ class SinksManager:
         # Loki sink
         if sinks_config.get("loki", {}).get("enabled", False):
             loki_config = sinks_config.get("loki", {})
+            # Merge defaults into loki config
+            loki_config = self._merge_sink_config(sink_defaults, loki_config)
             loki_sink = LokiSink(loki_config)
             self.sinks["loki"] = ResilientSink("loki", loki_sink, loki_config)
+
+    def _merge_sink_config(self, defaults: Dict[str, Any], sink_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge sink defaults with sink-specific config."""
+        merged = sink_config.copy()
+        
+        # Apply defaults for retry configuration
+        if "retry" not in merged:
+            merged["retry"] = {}
+        merged["retry"].setdefault("enabled", True)
+        merged["retry"].setdefault("max_retries", defaults.get("max_retries", 2))
+        merged["retry"].setdefault("initial_backoff_ms", defaults.get("initial_backoff_ms", 100))
+        merged["retry"].setdefault("max_backoff_ms", defaults.get("max_backoff_ms", 2000))
+        merged["retry"].setdefault("jitter_factor", defaults.get("jitter_factor", 0.1))
+        merged["retry"].setdefault("timeout_ms", defaults.get("timeout_ms", 1000))
+        
+        # Apply defaults for circuit breaker configuration
+        if "circuit_breaker" not in merged:
+            merged["circuit_breaker"] = {}
+        merged["circuit_breaker"].setdefault("enabled", True)
+        merged["circuit_breaker"].setdefault("failure_threshold", defaults.get("failure_threshold", 3))
+        merged["circuit_breaker"].setdefault("open_duration_sec", defaults.get("open_duration_sec", 30))
+        merged["circuit_breaker"].setdefault("half_open_max_inflight", defaults.get("half_open_max_inflight", 1))
+        
+        return merged
 
     async def start(self):
         """Start all enabled sinks."""
