@@ -129,9 +129,12 @@ class LokiClient:
                     errors += 1
 
             # Flush if batch is full OR if it's a small batch in CI environment
-            should_flush = len(self._batch_queue) >= self.config.get(
-                "batch_size", 100
-            ) or (len(self._batch_queue) > 0 and self._is_ci_environment())
+            # Also flush immediately for any environment with LOKI_ENABLED=true
+            is_ci_like = self._is_ci_environment() or os.getenv("LOKI_ENABLED") == "true"
+            should_flush = (
+                len(self._batch_queue) >= self.config.get("batch_size", 100)
+                or (len(self._batch_queue) > 0 and is_ci_like)
+            )
 
             if should_flush:
                 flush_result = await self._flush_batch()
@@ -146,23 +149,32 @@ class LokiClient:
                 if flush_errors > 0 and written == 0:
                     # Failed to flush any events, but they were attempted
                     logger.warning(
-                        "Failed to flush events to Loki in CI environment",
+                        "Failed to flush events to Loki in CI-like environment",
                         attempted=flush_errors,
                         queued_before_flush=queued,
+                        is_ci_like=is_ci_like,
                     )
 
         return {"written": written, "queued": queued, "errors": errors}
 
     def _is_ci_environment(self) -> bool:
         """Check if we're running in a CI environment where immediate flushing is preferred."""
-        # Only enable immediate flushing for GitHub Actions regression tests
-        # Not for regular CI runs or pytest executions
-        return (
-            os.getenv("GITHUB_ACTIONS") == "true"
-            and not os.getenv("PYTEST_CURRENT_TEST")  # Not during pytest
-            and os.getenv("MOTHERSHIP_LOG_LEVEL")
-            == "INFO"  # Only for actual service runs
+        # Check for GitHub Actions OR any environment with immediate flush needs
+        github_actions = os.getenv("GITHUB_ACTIONS") == "true"
+        mothership_ci = (
+            os.getenv("MOTHERSHIP_LOG_LEVEL") == "INFO" 
+            and not os.getenv("PYTEST_CURRENT_TEST")
         )
+        
+        # Also consider any case where Loki is enabled and we want immediate results
+        # This covers the regression test scenario and similar CI environments
+        loki_immediate_mode = (
+            self.config.get("enabled", False) 
+            and os.getenv("LOKI_ENABLED") == "true"
+            and (github_actions or mothership_ci)
+        )
+        
+        return loki_immediate_mode
 
     async def _wait_for_loki_ready(self, max_attempts: int = 30) -> bool:
         """Wait for Loki to be ready for ingestion in CI environments."""
@@ -400,9 +412,15 @@ class LokiClient:
         # Send to Loki with retries and improved error handling
         last_error = None
         # Use more retries in CI environment to handle potential timing issues
+        # Also add extra retries for any Loki-enabled CI-like environment
+        is_ci_like = self._is_ci_environment() or os.getenv("LOKI_ENABLED") == "true"
         max_retries = self.config.get(
-            "max_retries", 5 if self._is_ci_environment() else 3
+            "max_retries", 8 if is_ci_like else 3
         )
+        
+        # Add initial delay for CI environments to let Loki stabilize
+        if is_ci_like:
+            await asyncio.sleep(1.0)  # Give Loki a moment to be truly ready
 
         for attempt in range(max_retries + 1):
             try:
@@ -410,8 +428,8 @@ class LokiClient:
 
                 # Use longer timeout for CI environments to handle potential network delays
                 timeout = (
-                    15.0
-                    if self._is_ci_environment()
+                    20.0
+                    if is_ci_like
                     else self.config.get("timeout_seconds", 30.0)
                 )
 
@@ -419,14 +437,15 @@ class LokiClient:
 
                 if response.status_code == 204:
                     success_msg = "Batch sent to Loki successfully"
-                    if self._is_ci_environment():
-                        success_msg += " (CI environment)"
+                    if is_ci_like:
+                        success_msg += " (CI-like environment)"
                     logger.info(
                         success_msg,
                         entries=len(entries),
                         streams=len(streams),
                         attempt=attempt,
                         readiness_check_passed=loki_ready,
+                        ci_like=is_ci_like,
                     )
                     return {"written": len(entries), "errors": 0}
                 else:
@@ -443,7 +462,7 @@ class LokiClient:
                     # Use exponential backoff with jitter for better reliability
                     base_backoff = self.config.get(
                         "retry_backoff_seconds",
-                        2.0 if self._is_ci_environment() else 1.0,
+                        2.0 if is_ci_like else 1.0,
                     )
                     backoff = base_backoff * (2**attempt) + (
                         0.1 * attempt
@@ -453,19 +472,20 @@ class LokiClient:
                         attempt=attempt,
                         backoff=backoff,
                         error=str(e),
-                        ci_environment=self._is_ci_environment(),
+                        ci_like=is_ci_like,
                     )
                     await asyncio.sleep(backoff)
                 else:
                     error_msg = "Loki request failed after all retries"
-                    if self._is_ci_environment():
-                        error_msg += " (CI environment)"
+                    if is_ci_like:
+                        error_msg += " (CI-like environment)"
                     logger.error(
                         error_msg,
                         attempts=attempt + 1,
                         error=str(e),
                         last_error=str(last_error),
                         readiness_check_passed=loki_ready,
+                        ci_like=is_ci_like,
                     )
 
         # All retries failed

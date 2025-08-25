@@ -119,6 +119,10 @@ jobs:
           curl -sS http://localhost:8443/healthz | tee reports/healthz.json || true
           curl -sS http://localhost:8443/stats | tee reports/stats-before.json || true
           curl -sS http://localhost:8443/metrics | head -n 200 | tee reports/metrics-before.txt || true
+          
+          # Additional wait to ensure both Mothership and Loki are fully synchronized
+          echo "Allowing additional time for service synchronization..."
+          sleep 10
 
       - name: Ingest test batch (verify redact/enrich + dual sinks)
         id: ingest
@@ -147,10 +151,30 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @/tmp/payload.json | tee reports/ingest-response.json
           
-          # Check ingest response for sink results
+          # Check ingest response for sink results  
           echo "Ingest response:"
           cat reports/ingest-response.json
           echo ""
+          
+          # Validate that ingestion was successful before proceeding
+          INGEST_STATUS=$(jq -r '.status // "unknown"' reports/ingest-response.json)
+          if [ "$INGEST_STATUS" != "success" ]; then
+            echo "❌ Ingestion failed with status: $INGEST_STATUS"
+            echo "Response details:"
+            jq . reports/ingest-response.json
+            exit 1
+          fi
+          
+          # Check if Loki sink reported successful writes
+          LOKI_WRITTEN=$(jq -r '.sink_results.loki.written // 0' reports/ingest-response.json)
+          if [ "$LOKI_WRITTEN" -eq 0 ]; then
+            echo "⚠️ Warning: Loki sink reported 0 events written"
+            echo "Loki sink result:"
+            jq '.sink_results.loki // {}' reports/ingest-response.json
+            echo "This may cause the query validation to fail"
+          else
+            echo "✅ Loki sink reported $LOKI_WRITTEN events written successfully"
+          fi
           
           # Wait longer to ensure Loki batching AND indexing completes in CI environment
           echo "Waiting for Loki batch processing and query indexing..."
@@ -201,6 +225,19 @@ jobs:
               echo "❌ Loki did not return the test event after $attempt attempts"
               echo "Final query response:"
               jq . reports/loki-query-attempt${attempt}.json
+              
+              # Additional debugging information
+              echo ""
+              echo "🔍 Debugging Information:"
+              echo "Query used: {source=\"mothership\"} |= \"$TEST_ID\""
+              echo "Time range: $START_NS to $END_NS"
+              echo "Expected: Event with source=mothership containing '$TEST_ID'"
+              echo ""
+              echo "This suggests either:"
+              echo "1. Data was not written to Loki (check ingestion logs above)"
+              echo "2. Data was written with different labels/content"
+              echo "3. Timing issue - data not yet indexed for querying"
+              
               exit 1
             else
               echo "No match on attempt $attempt, retrying in $((attempt * 5)) seconds..."
