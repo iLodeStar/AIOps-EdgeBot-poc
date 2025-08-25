@@ -55,13 +55,38 @@ jobs:
 
       - name: Wait for Loki readiness
         run: |
+          # First check the /ready endpoint
           for i in {1..60}; do
             if curl -sf http://localhost:3100/ready >/dev/null; then
-              echo "Loki ready"; exit 0
+              echo "Loki /ready endpoint is healthy"; break
             fi
-            echo "Waiting for Loki..."; sleep 2
+            echo "Waiting for Loki ready endpoint..."; sleep 2
           done
-          echo "Loki did not become ready in time"; exit 1
+          
+          # Then verify Loki can actually accept data with a test push
+          echo "Verifying Loki ingestion capability..."
+          for i in {1..15}; do
+            TEST_RESPONSE=$(curl -s -w "%{http_code}" -X POST \
+              "http://localhost:3100/loki/api/v1/push" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "streams": [
+                  {
+                    "stream": {"test": "ci_readiness"},
+                    "values": [["'$(date +%s%N)'", "CI readiness test"]]
+                  }
+                ]
+              }')
+            
+            HTTP_CODE="${TEST_RESPONSE: -3}"
+            if [ "$HTTP_CODE" = "204" ]; then
+              echo "✅ Loki ingestion verified - ready for regression test"; exit 0
+            else
+              echo "Loki ingestion test failed (HTTP $HTTP_CODE), retrying in 2s..."
+              sleep 2
+            fi
+          done
+          echo "❌ Loki ingestion verification failed after all attempts"; exit 1
 
       - name: Wait for TimescaleDB readiness
         env:
@@ -167,8 +192,24 @@ jobs:
           
           # Check if Loki sink reported successful writes
           LOKI_WRITTEN=$(jq -r '.sink_results.loki.written // 0' reports/ingest-response.json)
-          if [ "$LOKI_WRITTEN" -eq 0 ]; then
-            echo "⚠️ Warning: Loki sink reported 0 events written"
+          LOKI_ERRORS=$(jq -r '.sink_results.loki.errors // 0' reports/ingest-response.json)
+          
+          if [ "$LOKI_WRITTEN" -eq 0 ] && [ "$LOKI_ERRORS" -gt 0 ]; then
+            echo "❌ ERROR: Loki sink reported 0 events written with $LOKI_ERRORS error(s)"
+            echo "Loki sink result:"
+            jq '.sink_results.loki // {}' reports/ingest-response.json
+            echo ""
+            echo "This indicates a connectivity or configuration issue with Loki."
+            echo "The subsequent query will fail because no data was written to Loki."
+            echo ""
+            echo "🔧 Diagnostic information:"
+            echo "Testing Loki connectivity directly..."
+            curl -s -w "Loki ready endpoint: %{http_code}\\n" http://localhost:3100/ready || echo "Cannot reach Loki"
+            
+            # Don't fail immediately - let the query step show the expected failure
+            echo "Continuing to query step to demonstrate the issue..."
+          elif [ "$LOKI_WRITTEN" -eq 0 ]; then
+            echo "⚠️ Warning: Loki sink reported 0 events written (but no errors recorded)"
             echo "Loki sink result:"
             jq '.sink_results.loki // {}' reports/ingest-response.json
             echo "This may cause the query validation to fail"

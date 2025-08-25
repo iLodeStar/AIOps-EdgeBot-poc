@@ -391,9 +391,11 @@ class LokiClient:
             loki_ready = await self._wait_for_loki_ready()
             if not loki_ready:
                 logger.warning(
-                    "Loki readiness check failed, but proceeding with send attempt in CI environment"
+                    "Loki readiness check failed, but proceeding with send attempt in CI environment. "
+                    "If the following write attempts fail, it's likely due to Loki not being truly ready for ingestion."
                 )
-                # Don't fail immediately - try the actual send which might work
+                # Add extra delay to give Loki more time in case readiness check was premature
+                await asyncio.sleep(2.0)
 
         # Group entries by labels
         streams = {}
@@ -415,7 +417,7 @@ class LokiClient:
         # Also add extra retries for any Loki-enabled CI-like environment
         is_ci_like = self._is_ci_environment() or os.getenv("LOKI_ENABLED") == "true"
         max_retries = self.config.get(
-            "max_retries", 8 if is_ci_like else 3
+            "max_retries", 12 if is_ci_like else 3
         )
         
         # Add initial delay for CI environments to let Loki stabilize
@@ -458,6 +460,23 @@ class LokiClient:
 
             except Exception as e:
                 last_error = e
+                
+                # Provide detailed error information for debugging
+                error_details = {
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "url": url,
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                    "ci_like": is_ci_like,
+                    "entries_count": len(entries),
+                }
+                
+                # Add more specific error context
+                if hasattr(e, 'response'):
+                    error_details["response_status"] = getattr(e.response, 'status_code', None)
+                    error_details["response_text"] = getattr(e.response, 'text', None)
+                
                 if attempt < max_retries:
                     # Use exponential backoff with jitter for better reliability
                     base_backoff = self.config.get(
@@ -467,25 +486,24 @@ class LokiClient:
                     backoff = base_backoff * (2**attempt) + (
                         0.1 * attempt
                     )  # Add jitter
+                    
                     logger.warning(
                         "Loki request failed, retrying",
-                        attempt=attempt,
                         backoff=backoff,
-                        error=str(e),
-                        ci_like=is_ci_like,
+                        **error_details
                     )
                     await asyncio.sleep(backoff)
                 else:
+                    # Final failure - provide comprehensive error information
                     error_msg = "Loki request failed after all retries"
                     if is_ci_like:
-                        error_msg += " (CI-like environment)"
+                        error_msg += " (CI-like environment) - This will cause query validation to fail"
+                    
                     logger.error(
                         error_msg,
-                        attempts=attempt + 1,
-                        error=str(e),
-                        last_error=str(last_error),
                         readiness_check_passed=loki_ready,
-                        ci_like=is_ci_like,
+                        total_attempts=attempt + 1,
+                        **error_details
                     )
 
         # All retries failed
