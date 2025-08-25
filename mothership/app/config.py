@@ -475,14 +475,14 @@ class ConfigManager:
                 }
             },
             'sink_defaults': {
-                # SATCOM-friendly defaults (safe for satellite/at-sea networks)
-                'max_retries': 5,
-                'initial_backoff_ms': 500,
-                'max_backoff_ms': 30000,
-                'jitter_factor': 0.2,
-                'timeout_ms': 5000,
-                'failure_threshold': 5,
-                'open_duration_sec': 60,
+                # CI-friendly defaults (fast fail for continuous integration)
+                'max_retries': 2,
+                'initial_backoff_ms': 100,
+                'max_backoff_ms': 2000,
+                'jitter_factor': 0.1,
+                'timeout_ms': 1000,  # 1 second instead of 5
+                'failure_threshold': 3,
+                'open_duration_sec': 30,
                 'half_open_max_inflight': 1
             },
             'idempotency': {
