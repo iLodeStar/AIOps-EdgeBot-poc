@@ -166,15 +166,25 @@ class LokiClient:
             and not os.getenv("PYTEST_CURRENT_TEST")
         )
         
+        # Don't enable CI mode during pytest unless explicitly configured
+        in_pytest = os.getenv("PYTEST_CURRENT_TEST") is not None
+        
+        # GitHub Actions is considered a CI environment when Loki is enabled
+        # OR when it's the mothership process (not individual test scripts)
+        github_actions_ci = github_actions and (
+            os.getenv("LOKI_ENABLED") == "true" or  # Mothership server environment
+            not in_pytest  # Not in a pytest, so likely the main process
+        ) and self.config.get("enabled", False)
+        
         # Also consider any case where Loki is enabled and we want immediate results
-        # This covers the regression test scenario and similar CI environments
+        # This covers the regression test scenario and similar CI environments  
         loki_immediate_mode = (
             self.config.get("enabled", False) 
             and os.getenv("LOKI_ENABLED") == "true"
             and (github_actions or mothership_ci)
         )
         
-        return loki_immediate_mode
+        return github_actions_ci or loki_immediate_mode
 
     async def _wait_for_loki_ready(self, max_attempts: int = 30) -> bool:
         """Wait for Loki to be ready for ingestion in CI environments."""
@@ -417,7 +427,7 @@ class LokiClient:
         # Also add extra retries for any Loki-enabled CI-like environment
         is_ci_like = self._is_ci_environment() or os.getenv("LOKI_ENABLED") == "true"
         max_retries = self.config.get(
-            "max_retries", 12 if is_ci_like else 3
+            "max_retries", 15 if is_ci_like else 3  # More retries for CI reliability
         )
         
         # Add initial delay for CI environments to let Loki stabilize

@@ -155,14 +155,20 @@ class SinksManager:
         
         # Use longer timeout for CI environments to handle Loki startup delays
         import os
-        is_ci = (
-            os.getenv('GITHUB_ACTIONS') == 'true' and 
+        github_actions = os.getenv('GITHUB_ACTIONS') == 'true'
+        mothership_ci = (
             not os.getenv('PYTEST_CURRENT_TEST') and
             os.getenv('MOTHERSHIP_LOG_LEVEL') == 'INFO'
         )
+        # Only consider CI environment for timeout adjustments if not in pytest
+        # or if explicitly configured for mothership
+        in_pytest = os.getenv('PYTEST_CURRENT_TEST') is not None
+        is_ci = (github_actions or mothership_ci) and not in_pytest
         default_timeout = 20000 if is_ci else 1000  # 20s for CI, 1s for others
         logger.debug("Timeout configuration", is_ci=is_ci, default_timeout=default_timeout,
-                   github_actions=os.getenv('GITHUB_ACTIONS'),
+                   github_actions=github_actions,
+                   mothership_ci=mothership_ci,
+                   in_pytest=in_pytest,
                    pytest_test=os.getenv('PYTEST_CURRENT_TEST'),
                    log_level=os.getenv('MOTHERSHIP_LOG_LEVEL'),
                    defaults_timeout=defaults.get("timeout_ms"),
